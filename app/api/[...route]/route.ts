@@ -113,7 +113,7 @@ function failure(error: unknown) {
     {
       error: "REQUEST_FAILED",
       message:
-        "This request could not be completed. Your previous state is preserved.",
+        "This request could not be completed. Refresh to see the latest state, then try again.",
     },
     500,
   );

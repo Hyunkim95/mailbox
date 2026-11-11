@@ -14,9 +14,11 @@ PayPal is central to execution. Each service has its own spending mandate, with 
 
 The model interprets requests and extracts typed email facts. It cannot grant permission, choose a payee or turn an email into proof of payment. Raw email extraction has no action tools. Image-only content is flagged unread rather than assigned invented facts.
 
+Channel3 supplies live product search and retailer offers under the selected agent. Retailer links do not enforce checkout identity or establish a completed purchase. AG Studio renders each agent’s data and previews natural-language dashboard changes, saved separately for that agent. Neither integration can change spending permission.
+
 The reference merchants use a thin TypeScript SDK over MCP and PayPal. Adding a service with an existing subscription, purchase or booking capability is a new configuration. The demo uses this SDK itself; no outside merchant adoption is claimed.
 
-Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI or Claude structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 50 core tests and ten browser scenarios pass using real MCP calls and injected provider responses. Real OpenAI request interpretation and email extraction passed a direct API check. Real Anthropic, payment/email-provider acceptance and hosted execution remain pending.
+Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI or Claude structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 51 core tests and twelve browser scenarios pass using real MCP calls and injected provider responses. Real OpenAI request interpretation and email extraction passed a direct API check. Two real AgentMail agent addresses were created, and 12 controlled streaming and grocery sample emails were delivered and ingested. These are fixture content, not payment evidence. The account’s three-inbox quota currently prevents Table and Paws from receiving their own addresses; their messages remain labeled previews. PayPal accepted a real sandbox setup-token request and returned its buyer approval step. No saved payment token or real sandbox charge has been verified. Real Anthropic and hosted acceptance remain pending.
 
 ## Recording plan
 
@@ -24,8 +26,8 @@ Target 2:45. Record actual application operation after live acceptance. Keep cut
 
 | Time | On screen | Narration |
 | --- | --- | --- |
-| 0:00 to 0:20 | Before Mailbox inbox, then the ask bar | “Maya's services keep sending offers and renewal notices. She wants to watch one film, but finding the right service and remembering the payment are separate jobs. Mailbox puts them together.” |
-| 0:20 to 0:40 | Type the film request, compare three options, choose one month | “She asks for The Lantern Coast. Her agent checks the services through MCP and compares the current options. Maya chooses one month, with renewal disabled.” |
+| 0:00 to 0:20 | Before Mailbox inbox, then Reel’s agent workspace and address | “Maya's services keep sending offers and renewal notices. She wants to watch one film, but finding the right service and remembering the payment are separate jobs. Mailbox gives her agents a home for their services, messages and decisions.” |
+| 0:20 to 0:40 | In Reel, type the film request, compare three options, choose one month | “Maya asks Reel for The Lantern Coast. Her agent checks the services through MCP and compares the current options. Maya chooses one month, with renewal disabled.” |
 | 0:40 to 1:00 | Wallet permission and actual sandbox consent | “Every service gets its own wallet. Maya sets its spending limit and approval rules, then connects PayPal in the sandbox.” |
 | 1:00 to 1:20 | Actual capture, service row, received email and cancellation date | “The service activates after payment is independently verified. Its address, confirmation, wallet debit and cancellation date stay together.” |
 | 1:20 to 1:35 | Coffee comparison, source email, approved purchase and receipt | “For coffee, the agent compares current pack prices per kilogram, checks stock and ignores expired offers.” |
@@ -33,7 +35,7 @@ Target 2:45. Record actual application operation after live acceptance. Keep cut
 | 1:50 to 2:05 | Exact pet-food rule, one capture and receipt | “For pet food, Maya can approve a one-time purchase below her chosen price. That rule applies to this exact item.” |
 | 2:05 to 2:25 | Upsell message, quiet decline, wallet ledger | “An email cannot expand that permission. The upgrade stays unapproved, and Maya can see the decision or disconnect spending.” |
 | 2:25 to 2:35 | SDK configuration beside the resulting service | “Our invented merchants use a small SDK over MCP and PayPal. Here is how another supported service would integrate.” |
-| 2:35 to 2:45 | Four services, four distinct wallets | “One address and one wallet per service. An agent that can help, within the limits you set.” |
+| 2:35 to 2:45 | Agent workspaces, a saved AG Studio dashboard, and distinct service wallets | “An address for each agent. A separate wallet for each service. Help with the jobs you choose, within the limits you set.” |
 
 ## Final entry fields
 

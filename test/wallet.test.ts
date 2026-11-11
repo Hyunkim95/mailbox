@@ -269,8 +269,17 @@ test("the 24 committed email previews are idempotent and received mail is not du
     store.saveMessage({ ...received, id: "racing-copy" });
     assert.equal(store.messages("owner").length, 24);
     store.setSetting("message-mode:owner", "live");
-    assert.equal(store.messages("owner").length, 1);
-    assert.equal(store.messages("owner")[0]!.provider_id, "actual-provider-id");
+    assert.equal(store.messages("owner").length, 24);
+    assert.equal(
+      store.messages("owner").filter((m) => m.origin === "fixture_preview")
+        .length,
+      23,
+    );
+    assert.equal(
+      store.messages("owner").find((m) => m.origin === "agentmail")!
+        .provider_id,
+      "actual-provider-id",
+    );
   } finally {
     store.close();
   }
@@ -399,5 +408,55 @@ test("in-flight revocation retains the token only until original payment reconci
       if (previous[index] === undefined) delete process.env[key];
       else process.env[key] = previous[index];
     }
+  }
+});
+
+test("provider inbox limit during live seeding preserves all previews and received evidence", async () => {
+  const store = new AppStore(":memory:");
+  const previousKey = process.env.AGENTMAIL_API_KEY;
+  const previousFetch = globalThis.fetch;
+  process.env.AGENTMAIL_API_KEY = "fixture-key";
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json(
+      {
+        name: "LimitExceededError",
+        code: "limit_exceeded",
+        message: "Inbox limit exceeded",
+      },
+      { status: 403 },
+    );
+  };
+  try {
+    await seedMessages(store, "owner", false);
+    const preview = fixtureMessages("owner")[0]!;
+    store.saveMessage({
+      ...preview,
+      origin: "agentmail",
+      provider_id: "received-before-failure",
+    });
+    await assert.rejects(
+      seedMessages(store, "owner", true),
+      (error: unknown) =>
+        error instanceof MerchantError && error.code === "EMAIL_INBOX_LIMIT",
+    );
+    assert.equal(calls, 1);
+    assert.equal(store.messages("owner").length, 24);
+    assert.equal(
+      store.messages("owner").filter((m) => m.origin === "fixture_preview")
+        .length,
+      23,
+    );
+    assert.equal(
+      store.messages("owner").find((m) => m.origin === "agentmail")!
+        .provider_id,
+      "received-before-failure",
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env.AGENTMAIL_API_KEY;
+    else process.env.AGENTMAIL_API_KEY = previousKey;
+    store.close();
   }
 });

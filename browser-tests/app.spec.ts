@@ -376,3 +376,27 @@ test("agent sections stay nested without replacing global navigation", async ({
     fullPage: true,
   });
 });
+
+test("an unrelated search error is not shown as a pending payment error", async ({
+  page,
+}) => {
+  await login(page, "Reel");
+  await page.getByRole("button", { name: "Watch a film", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Review proposal", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Across the market", exact: true })
+    .click();
+  await page
+    .getByRole("textbox", { name: /^Ask / })
+    .fill("wireless headphones under $100");
+  await page.getByRole("button", { name: "Send request", exact: true }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Channel3 connection" }),
+  ).toBeVisible();
+  await expect(page.locator(".proposal-card")).toBeVisible();
+  await expect(page.locator(".proposal-card")).not.toContainText(
+    "Channel3 connection",
+  );
+});

@@ -66,7 +66,6 @@ export async function seedMessages(
     message.agent_id = defaultAgent(store, owner, service).id;
   }
   if (!send) {
-    store.setSetting(`message-mode:${owner}`, "preview");
     for (const message of messages) store.saveMessage(message);
     store.log(
       owner,
@@ -80,7 +79,6 @@ export async function seedMessages(
       "EMAIL_NOT_CONFIGURED",
       "Add the email API key before sending the live seed.",
     );
-  store.setSetting(`message-mode:${owner}`, "live");
   const provider = new AgentMailClient({
     apiKey: process.env.AGENTMAIL_API_KEY!,
   });

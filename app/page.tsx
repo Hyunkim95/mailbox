@@ -192,6 +192,7 @@ export default function Mailbox() {
     [result, setResult] = useState<Result | null>(null),
     [busy, setBusy] = useState<string | null>(null),
     [error, setError] = useState(""),
+    [failedAction, setFailedAction] = useState<string | null>(null),
     [notice, setNotice] = useState("");
   const [selectedService, setSelectedService] = useState<string | null>(null),
     [openMessage, setOpenMessage] = useState<Message | null>(null),
@@ -274,6 +275,7 @@ export default function Mailbox() {
       payload = { ...payload, agent_id: activeAgentId };
     setBusy(label);
     setError("");
+    setFailedAction(null);
     try {
       const response = await fetch("/api/command", {
         method: "POST",
@@ -317,6 +319,7 @@ export default function Mailbox() {
       return data;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Please try again.");
+      setFailedAction(String(payload.action));
       try {
         await refresh();
       } catch {}
@@ -980,7 +983,7 @@ export default function Mailbox() {
                               ),
                           }
                         : {})}
-                      errorMessage={error}
+                      errorMessage={failedAction === "approve" ? error : ""}
                       proposal={activeProposal}
                       wallet={proposalWallet}
                       busy={!!busy}
@@ -1015,7 +1018,7 @@ export default function Mailbox() {
                       Your services{" "}
                       <span className="count">{state.wallets.length}</span>
                     </h2>
-                    <p>One address. One wallet. A clear next step.</p>
+                    <p>One agent address. Separate service wallets.</p>
                   </div>
                   <button
                     className="text-button"
@@ -1317,7 +1320,9 @@ export default function Mailbox() {
                         {date(m.received_at)}
                         <small>
                           {m.origin === "agentmail"
-                            ? "Received"
+                            ? m.scenario || m.id.startsWith("fixture:")
+                              ? "Received sample"
+                              : "Received"
                             : "Fixture preview"}
                         </small>
                       </span>
@@ -1436,7 +1441,9 @@ export default function Mailbox() {
         >
           <div className="eyebrow">
             {openMessage.origin === "agentmail"
-              ? "Original received email"
+              ? openMessage.scenario || openMessage.id.startsWith("fixture:")
+                ? "Original received sample email"
+                : "Original received email"
               : "Fixture preview"}
           </div>
           <h2>{openMessage.subject}</h2>

@@ -1,4 +1,4 @@
-import { AgentMailClient } from "agentmail";
+import { AgentMailClient, AgentMailError } from "agentmail";
 import { randomUUID, createHash } from "node:crypto";
 import fixtureEmails from "../fixtures/emails.json" with { type: "json" };
 import { MerchantError } from "@mailbox/service-sdk";
@@ -16,6 +16,20 @@ function client() {
       "Add the email API key to create service addresses.",
     );
   return new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY! });
+}
+function providerFailure(error: unknown): never {
+  if (
+    error instanceof AgentMailError &&
+    error.body &&
+    typeof error.body === "object" &&
+    "code" in error.body &&
+    error.body.code === "limit_exceeded"
+  )
+    throw new MerchantError(
+      "EMAIL_INBOX_LIMIT",
+      "The email provider’s inbox limit has been reached. Existing mail and labeled previews are kept. Reuse an existing agent address or increase your provider inbox capacity.",
+    );
+  throw error;
 }
 export async function provisionAddress(store: AppStore, wallet: Wallet) {
   if (wallet.inbox_id && wallet.email) return wallet;
@@ -50,11 +64,13 @@ export async function provisionAgentAddress(
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       .slice(0, 24) || "agent";
-  const inbox = await client().inboxes.create({
-    username: `${slug}-${agent.id.slice(0, 8)}`,
-    displayName: agent.name,
-    clientId: agent.id,
-  });
+  const inbox = await client()
+    .inboxes.create({
+      username: `${slug}-${agent.id.slice(0, 8)}`,
+      displayName: agent.name,
+      clientId: agent.id,
+    })
+    .catch(providerFailure);
   agent = store.agent(agent.owner, agent.id);
   agent.inbox_id = inbox.inboxId;
   agent.email = inbox.email;
@@ -70,10 +86,12 @@ export async function provisionAgentAddress(
 export async function merchantSender(store: AppStore) {
   const existing = store.setting<string>("merchant_sender");
   if (existing) return existing;
-  const inbox = await client().inboxes.create({
-    displayName: "Mailbox Fixture Merchant",
-    clientId: "mailbox-fixture-merchant",
-  });
+  const inbox = await client()
+    .inboxes.create({
+      displayName: "Mailbox Fixture Merchant",
+      clientId: "mailbox-fixture-merchant",
+    })
+    .catch(providerFailure);
   store.setSetting("merchant_sender", inbox.inboxId);
   return inbox.inboxId;
 }

@@ -87,7 +87,12 @@ export function AgentHome({
                 <footer>
                   <small>
                     {messages.length} message{messages.length !== 1 ? "s" : ""}
-                    {messages.some((m) => m.origin === "fixture_preview")
+                    {messages.some(
+                      (m) =>
+                        m.origin === "fixture_preview" ||
+                        m.scenario ||
+                        m.id.startsWith("fixture:"),
+                    )
                       ? " · includes samples"
                       : ""}
                   </small>

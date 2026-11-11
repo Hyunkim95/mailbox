@@ -275,12 +275,7 @@ export class AppStore {
       .prepare("SELECT body FROM messages WHERE owner=? ORDER BY rowid DESC")
       .all(owner)
       .map((row) => JSON.parse(row.body as string) as Message)
-      .filter(
-        (message) =>
-          (!serviceId || message.service_id === serviceId) &&
-          (this.setting<string>(`message-mode:${owner}`) !== "live" ||
-            message.origin === "agentmail"),
-      );
+      .filter((message) => !serviceId || message.service_id === serviceId);
   }
   saveMessage(message: Message) {
     this.db
