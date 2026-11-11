@@ -1,6 +1,6 @@
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { MerchantError } from "./definition.js";
+import { MerchantError, isMerchantError } from "./definition.js";
 import type { Merchant } from "./merchant.js";
 
 const id = z.string().min(1).max(128);
@@ -25,7 +25,7 @@ function result(run: () => unknown): CallToolResult {
       structuredContent: { data, fixture: true },
     };
   } catch (error) {
-    if (!(error instanceof MerchantError)) throw error;
+    if (!isMerchantError(error)) throw error;
     return {
       isError: true,
       content: [{ type: "text", text: `${error.code}: ${error.message}` }],

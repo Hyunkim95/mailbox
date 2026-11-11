@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { Webhook } from "svix";
 import { z } from "zod";
-import { MerchantError } from "@mailbox/service-sdk";
+import { MerchantError, isMerchantError } from "@mailbox/service-sdk";
 import { appService } from "../../../src/runtime";
 import {
   createSession,
@@ -102,7 +102,7 @@ function failure(error: unknown) {
       },
       400,
     );
-  if (error instanceof MerchantError)
+  if (isMerchantError(error))
     return response(
       { error: error.code, message: error.message },
       error.code === "NOT_FOUND" ? 404 : 409,

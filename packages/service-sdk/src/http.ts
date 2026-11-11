@@ -9,7 +9,7 @@ import {
   localhostOriginValidation,
   NodeStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/node";
-import { MerchantError } from "./definition.js";
+import { MerchantError, isMerchantError } from "./definition.js";
 import { createMerchantMcp } from "./mcp.js";
 import { Merchant } from "./merchant.js";
 import type { CaptureVerifier, WebhookVerifier } from "./payments.js";
@@ -121,10 +121,7 @@ export function createMerchantHttp(options: {
           );
           json(res, 200, { action_id: action.id, status: action.status });
         } catch (error) {
-          if (
-            error instanceof MerchantError &&
-            error.code === "ACTION_NOT_FOUND"
-          )
+          if (isMerchantError(error) && error.code === "ACTION_NOT_FOUND")
             json(res, 200, { ignored: true });
           else throw error;
         }
@@ -221,7 +218,7 @@ export function createMerchantHttp(options: {
         res.end();
         return;
       }
-      if (error instanceof MerchantError)
+      if (isMerchantError(error))
         json(res, error.code === "REQUEST_TOO_LARGE" ? 413 : 400, {
           error: error.code,
           message: error.message,

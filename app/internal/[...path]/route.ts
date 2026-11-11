@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { MerchantError } from "@mailbox/service-sdk";
+import { MerchantError, isMerchantError } from "@mailbox/service-sdk";
 import { secretReady } from "../../../src/secret-config";
 import {
   merchantRuntime,
@@ -78,11 +78,10 @@ export async function POST(
   } catch (error) {
     return Response.json(
       {
-        error: error instanceof MerchantError ? error.code : "INVALID_REQUEST",
-        message:
-          error instanceof MerchantError
-            ? error.message
-            : "Invalid internal request.",
+        error: isMerchantError(error) ? error.code : "INVALID_REQUEST",
+        message: isMerchantError(error)
+          ? error.message
+          : "Invalid internal request.",
       },
       { status: 400 },
     );

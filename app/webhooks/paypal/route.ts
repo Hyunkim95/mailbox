@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { MerchantError } from "@mailbox/service-sdk";
+import { isMerchantError } from "@mailbox/service-sdk";
 import {
   merchantRuntime,
   captureVerifier,
@@ -27,10 +27,10 @@ export async function POST(request: NextRequest) {
     );
     return Response.json({ action_id: action.id, status: action.status });
   } catch (error) {
-    if (error instanceof MerchantError && error.code === "ACTION_NOT_FOUND")
+    if (isMerchantError(error) && error.code === "ACTION_NOT_FOUND")
       return Response.json({ ignored: true });
     return Response.json(
-      { error: error instanceof MerchantError ? error.code : "INVALID_EVENT" },
+      { error: isMerchantError(error) ? error.code : "INVALID_EVENT" },
       { status: 503 },
     );
   }

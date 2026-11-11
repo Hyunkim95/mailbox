@@ -1,6 +1,7 @@
 export {
   createService,
   MerchantError,
+  isMerchantError,
   addBillingMonth,
   serviceSchema,
   itemSchema,

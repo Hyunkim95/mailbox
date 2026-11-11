@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isSharedDemoOwner } from "./auth.ts";
 import {
   MerchantError,
+  isMerchantError,
   type Action,
   type Quote,
   type Service,
@@ -1154,7 +1155,7 @@ export class AppService {
           await this.paypal.removeToken(token);
         } catch (error) {
           if (
-            !(error instanceof MerchantError) ||
+            !isMerchantError(error) ||
             !["RESOURCE_NOT_FOUND", "INVALID_RESOURCE_ID"].includes(error.code)
           )
             throw error;

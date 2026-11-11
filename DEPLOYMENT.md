@@ -28,3 +28,5 @@ Use only the owned sandbox accounts and invented merchant data. Record actual pr
 ## Judging handoff
 
 Provide the actual URL, a dedicated demo login and sandbox buyer instructions through the submission's testing fields. Keep API secrets out of the public repository. Leave the demo available through 15 December 2026, including the background worker and receiving webhooks. The [official rules](https://paypalaihackathon.devpost.com/rules) allow setup instructions or hosting, require public licensed source and a public YouTube demonstration under three minutes, and require a functioning build matching the claims.
+
+When updating environment variables through the Render API, retrieve every page before replacing the collection with PUT. Confirm the complete set afterward, including AgentMail, the selected model provider and Channel3. A partial listing must never be used as the replacement configuration.

@@ -77,7 +77,21 @@ export class MerchantError extends Error {
     message: string,
   ) {
     super(message);
+    this.name = "MerchantError";
+    Object.defineProperty(this, Symbol.for("mailbox.MerchantError"), {
+      value: true,
+    });
   }
+}
+export function isMerchantError(error: unknown): error is MerchantError {
+  if (error instanceof MerchantError) return true;
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as Record<PropertyKey, unknown>;
+  return (
+    candidate[Symbol.for("mailbox.MerchantError")] === true &&
+    typeof candidate.code === "string" &&
+    typeof candidate.message === "string"
+  );
 }
 export function addBillingMonth(iso: string): string {
   const start = new Date(iso),

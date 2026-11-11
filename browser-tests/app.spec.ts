@@ -434,3 +434,17 @@ test("AgentMail verifies the raw signature before parsing a signed event", async
   });
   expect(invalid.status()).toBe(400);
 });
+
+test("service-domain failures preserve their code and useful message through the API", async ({
+  page,
+}) => {
+  await login(page);
+  const response = await page.request.post("/api/command", {
+    data: { action: "propose", service_id: "not-a-service" },
+  });
+  expect(response.status()).toBe(409);
+  expect(await response.json()).toMatchObject({
+    error: "UNSUPPORTED_SERVICE",
+    message: "Choose one of the connected fixture services.",
+  });
+});
