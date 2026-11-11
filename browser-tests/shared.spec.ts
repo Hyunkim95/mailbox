@@ -13,6 +13,7 @@ async function enter(page: Page) {
 test("the dedicated demo key reopens the same agents across sign-out and browsers", async ({
   page,
   browser,
+  baseURL,
 }) => {
   await enter(page);
   const original = await (await page.request.get("/api/state")).json();
@@ -36,7 +37,7 @@ test("the dedicated demo key reopens the same agents across sign-out and browser
     reopened.agents.find((agent: { id: string }) => agent.id === reel.id).name,
   ).toBe("Reel Reviews");
   const otherContext = await browser.newContext({
-    baseURL: "http://127.0.0.1:3401",
+    baseURL,
   });
   try {
     const other = await otherContext.newPage();

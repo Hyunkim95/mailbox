@@ -147,6 +147,8 @@ async function owner() {
 export async function GET(request: NextRequest, context: Context) {
   try {
     const path = (await context.params).route.join("/");
+    // Proxies can expose their internal bind address as request.url.
+    const redirectBase = process.env.APP_URL || request.url;
     if (path === "state") {
       let account: string;
       try {
@@ -218,14 +220,14 @@ export async function GET(request: NextRequest, context: Context) {
         return NextResponse.redirect(
           new URL(
             `/?result=${p.status === "PAID" ? "paid" : p.status === "WAITING" ? "armed" : "pending"}${actor ? `&agent=${encodeURIComponent(actor)}` : ""}`,
-            request.url,
+            redirectBase,
           ),
         );
       } catch (error) {
         return NextResponse.redirect(
           new URL(
             `/?error=${encodeURIComponent(error instanceof Error ? error.message : "Wallet setup could not be completed.")}`,
-            request.url,
+            redirectBase,
           ),
         );
       }
@@ -235,7 +237,7 @@ export async function GET(request: NextRequest, context: Context) {
         state = request.nextUrl.searchParams.get("state");
       if (state) appService().store.deleteSetup(account, state);
       return NextResponse.redirect(
-        new URL("/?result=consent-canceled", request.url),
+        new URL("/?result=consent-canceled", redirectBase),
       );
     }
     return response({ error: "NOT_FOUND" }, 404);

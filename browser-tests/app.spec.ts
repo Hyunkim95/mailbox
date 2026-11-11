@@ -593,3 +593,34 @@ test("service-domain failures preserve their code and useful message through the
     message: "Choose one of the connected fixture services.",
   });
 });
+
+test("PayPal callbacks use the public app address behind a proxy", async ({
+  page,
+  baseURL,
+}) => {
+  await login(page);
+  const headers = {
+    host: "0.0.0.0:10000",
+    "x-forwarded-host": "untrusted.example",
+    "x-forwarded-proto": "https",
+  };
+  const canceled = await page.request.get("/api/paypal/cancel", {
+    headers,
+    maxRedirects: 0,
+  });
+  expect(canceled.status()).toBe(307);
+  expect(canceled.headers().location).toBe(
+    `${baseURL}/?result=consent-canceled`,
+  );
+
+  const failed = await page.request.get(
+    "/api/paypal/return?state=missing-setup",
+    { headers, maxRedirects: 0 },
+  );
+  expect(failed.status()).toBe(307);
+  const destination = new URL(failed.headers().location);
+  expect(destination.origin).toBe(baseURL);
+  expect(destination.searchParams.get("error")).toBe(
+    "Payment setup is missing or expired.",
+  );
+});
