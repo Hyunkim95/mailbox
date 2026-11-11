@@ -8,6 +8,7 @@ import { Digest } from "./digest";
 import { ReplyCard, type ReplyDraft } from "./reply-card";
 import {
   isExpiredOffer,
+  isDuplicateSubscription,
   money,
   needsYou,
   senderName,
@@ -482,10 +483,15 @@ export default function Mailbox() {
       setBusy(null);
     }
   }
-  const newest = state?.proposals.find((p) =>
-    ["NEEDS_APPROVAL", "APPROVED", "WAITING", "PAYING", "RECONCILING"].includes(
-      p.status,
-    ),
+  const newest = state?.proposals.find(
+    (p) =>
+      [
+        "NEEDS_APPROVAL",
+        "APPROVED",
+        "WAITING",
+        "PAYING",
+        "RECONCILING",
+      ].includes(p.status) && !isDuplicateSubscription(state, p),
   );
   const priorityProposal = state?.proposals.find((p) =>
     ["PAYING", "RECONCILING"].includes(p.status),
@@ -582,6 +588,7 @@ export default function Mailbox() {
   const showProposal =
     !!activeProposal &&
     !["DECLINED", "BLOCKED", "EXPIRED"].includes(activeProposal.status) &&
+    !isDuplicateSubscription(state, activeProposal) &&
     !!proposalWallet &&
     (!!priorityProposal ||
       (result?.type !== "options" &&

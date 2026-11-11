@@ -624,3 +624,49 @@ test("PayPal callbacks use the public app address behind a proxy", async ({
     "Payment setup is missing or expired.",
   );
 });
+
+test("a completed subscription does not ask for an older duplicate approval", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole("button", { name: "Watch a film", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Review proposal", exact: true })
+    .click();
+  await expect(page.getByTestId("proposal")).toBeVisible();
+  const state = await (await page.request.get("/api/state")).json();
+  const pending = state.proposals[0];
+  state.proposals.unshift({
+    ...pending,
+    id: "completed-subscription",
+    status: "PAID",
+    capture_id: "COMPLETED-CAPTURE",
+    period_end: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+  const wallet = state.wallets.find(
+    (candidate: { id: string }) => candidate.id === pending.wallet_id,
+  );
+  Object.assign(wallet, { status: "active", connected: true, spent: 799 });
+  await page.route("**/api/state", (route) => route.fulfill({ json: state }));
+  await page.reload();
+  await page.getByRole("button", { name: "Open Reel", exact: true }).click();
+  await expect(page.getByTestId("proposal")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Coast Screen.*Connected/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open Reel", exact: true }),
+  ).not.toHaveAttribute("title", /needs you/);
+  await page.getByRole("button", { name: /^Home/ }).click();
+  await expect(
+    page.getByRole("region", { name: "Waiting for your approval" }),
+  ).toHaveCount(0);
+
+  // A cancellation that has already taken effect permits a new subscription.
+  state.proposals[0].cancel_effective_at = new Date(
+    Date.now() - 86_400_000,
+  ).toISOString();
+  await page.reload();
+  await page.getByRole("button", { name: "Open Reel", exact: true }).click();
+  await expect(page.getByTestId("proposal")).toBeVisible();
+});

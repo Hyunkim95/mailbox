@@ -38,6 +38,28 @@ export const isExpiredOffer = (message: Message, now = new Date()) =>
   !!message.facts.expires &&
   new Date(message.facts.expires) < now;
 
+/** An active paid month already satisfies other requests for that subscription. */
+export function isDuplicateSubscription(
+  state: Pick<AppState, "proposals">,
+  proposal: Proposal,
+  now = new Date(),
+) {
+  if (
+    proposal.kind !== "subscribe" ||
+    !["NEEDS_APPROVAL", "APPROVED"].includes(proposal.status)
+  )
+    return false;
+  return state.proposals.some(
+    (other) =>
+      other.id !== proposal.id &&
+      other.wallet_id === proposal.wallet_id &&
+      other.kind === "subscribe" &&
+      other.status === "PAID" &&
+      (!other.period_end || new Date(other.period_end) > now) &&
+      (!other.cancel_effective_at || new Date(other.cancel_effective_at) > now),
+  );
+}
+
 export type Need =
   | {
       kind: "approval";
@@ -65,6 +87,7 @@ export function needsYou(state: QueueState): Need[] {
   state.agents.forEach((agent, agentIndex) => {
     for (const proposal of state.proposals) {
       if (proposal.status !== "NEEDS_APPROVAL") continue;
+      if (isDuplicateSubscription(state, proposal)) continue;
       if (!proposalBelongs(state, proposal, agent)) continue;
       const wallet = state.wallets.find((w) => w.id === proposal.wallet_id);
       if (wallet)

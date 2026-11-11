@@ -19,6 +19,7 @@ export const senderName = (from: string) =>
 export {
   digestFor,
   isExpiredOffer,
+  isDuplicateSubscription,
   needsYou,
   proposalBelongs,
   walletBelongs,
