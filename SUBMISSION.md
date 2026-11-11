@@ -18,7 +18,7 @@ Channel3 supplies live product search and retailer offers under the selected age
 
 The reference merchants use a thin TypeScript SDK over MCP and PayPal. Adding a service with an existing subscription, purchase or booking capability is a new configuration. The demo uses this SDK itself; no outside merchant adoption is claimed.
 
-Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI or Claude structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 52 core tests and twelve browser scenarios pass using real MCP calls and injected provider responses. Real OpenAI request interpretation and email extraction passed a direct API check. Two real AgentMail agent addresses were created, and 12 controlled streaming and grocery sample emails were delivered and ingested. These are fixture content, not payment evidence. The approved demo uses Reel and Pantry as its two live email agents. Table and Paws remain explicitly labeled fixture walkthroughs; no live paid execution or received confirmation is claimed for them. PayPal accepted a real sandbox setup-token request and returned its buyer approval step. No saved payment token or real sandbox charge has been verified. Real Anthropic and hosted acceptance remain pending.
+Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI or Claude structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 53 core tests and fourteen browser scenarios pass using real MCP calls and injected provider responses. Real OpenAI request interpretation and email extraction passed a direct API check. Two real AgentMail agent addresses were created, and 12 controlled streaming and grocery sample emails were delivered and ingested. These are fixture content, not payment evidence. The approved demo uses Reel and Pantry as its two live email agents. Table and Paws remain explicitly labeled fixture walkthroughs; no live paid execution or received confirmation is claimed for them. PayPal accepted a real sandbox setup-token request and returned its buyer approval step. No saved payment token or real sandbox charge has been verified. Real Anthropic and hosted acceptance remain pending.
 
 ## Recording plan
 
@@ -42,7 +42,7 @@ Target 2:50. Record actual application operation after live acceptance. Keep cut
 ## Final entry fields
 
 - Public MIT repository URL: https://github.com/Hyunkim95/mailbox.
-- Functional demo URL and dedicated judge login: pending hosting and live acceptance.
+- Functional demo URL and dedicated judge login: pending hosting and live acceptance. The dedicated key reopens one shared Maya workspace, retaining Reel and Pantry’s addresses; disclose that key holders share its demo data and wallet settings.
 - Public YouTube URL: pending recording and upload.
 - Team identity and entrant declarations: owner-provided fields.
 - Payment/email/model evidence: pending real-provider run; do not replace with fixture screenshots.

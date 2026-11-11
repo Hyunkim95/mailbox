@@ -44,6 +44,7 @@ Fill `.env` using `.env.example`:
 | `CHANNEL3_API_KEY` | Live product search and retailer offers |
 | `NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY` | AG Studio trial/production license, supplied at build time |
 | `RENDER_API_KEY`, `RENDER_OWNER_ID` | Hosting setup, if using Render |
+| `DEMO_WORKSPACE_ID` | Optional existing workspace UUID for a shared demo login; blank keeps sign-ins isolated |
 
 The selected demo uses two live agent addresses, Reel and Pantry, plus the merchant sender, within the account’s three-inbox limit. Table and Paws keep labeled preview emails. Each live agent address can be reused across multiple service signups. Other configurations need sufficient provider inbox capacity. Model-backed requests, provider delivery, real Vault charging and hosted execution must be verified with the actual configured accounts. Offline tests use explicit provider fixtures and do not establish sandbox acceptance.
 
@@ -53,7 +54,9 @@ Without service credentials, the app supports clearly labeled fixture walkthroug
 
 The private demo starts with four sample agents and 24 labeled email fixtures. **Demo setup → Load preview emails** refreshes those same fixtures. Variants include plain text, HTML newsletters and hidden preheaders, an unpaid invoice, receipts, renewal and cancellation notices, expired prices, a wrong pet-food variant and malicious instructions. **Send samples to connected agents** sends matching fixtures through AgentMail only to agents with existing addresses. It creates no extra agent inboxes or wallets; unconnected agents keep labeled previews. Merchant confirmations are live outbox messages following verified capture. Both the service view and generic before-inbox use the same stored data.
 
-**Reset workspace** disables the old workspace's queued authority and cancels controlled streaming access, then starts a fresh private workspace. It retains historical sandbox payments and cannot silently discard an uncertain in-flight payment. Seeding and replay are idempotent within their recorded request identities.
+With `DEMO_WORKSPACE_ID` set, the dedicated demo key reopens that same workspace across sign-ins and browsers. Everyone holding that key shares its agents, addresses, messages and service wallets; it is a shared demonstration account. Blank configuration retains isolated sign-ins. Login never reseeds an existing workspace.
+
+**Reset workspace** disables queued authority and cancels controlled streaming access. In shared-demo mode it retains agent addresses, messages and payment history and leaves service wallets paused. Isolated mode opens a fresh private workspace. Reset cannot silently discard an uncertain in-flight payment. Seeding and replay are idempotent within their recorded request identities.
 
 ## Architecture
 
@@ -106,7 +109,7 @@ Core checks exercise actual MCP HTTP clients plus injected PayPal responses, fin
 
 A fresh public clone at `0350f20` on Linux passed installation, private local setup, all 51 core checks and the production build. Its running server also passed generated-key login, four agent profiles, 24 labeled preview messages, three MCP film options and the $6.50 coffee proposal bound to Pantry, with no external provider credentials or claimed payments.
 
-Current checks: 52 core tests and twelve browser scenarios pass. A real PayPal sandbox setup-token request returned `PAYER_ACTION_REQUIRED` with an approval link; no payment token was saved and no charge occurred. A real `gpt-6.1-sol` API run also passed request interpretation and extraction of separate discount and cashback values. Claude requests pass injected SDK transport tests; a real Anthropic call is pending its API key. A live acceptance run must additionally prove saved-token charging, the real merchant callback and received email, full model-backed application requests, cancellation/condition behavior and the post-approval timing target. Submission claims must follow that evidence.
+Current checks: 53 core tests and fourteen browser scenarios pass. A real PayPal sandbox setup-token request returned `PAYER_ACTION_REQUIRED` with an approval link; no payment token was saved and no charge occurred. A real `gpt-6.1-sol` API run also passed request interpretation and extraction of separate discount and cashback values. Claude requests pass injected SDK transport tests; a real Anthropic call is pending its API key. A live acceptance run must additionally prove saved-token charging, the real merchant callback and received email, full model-backed application requests, cancellation/condition behavior and the post-approval timing target. Submission claims must follow that evidence.
 
 ## Agent dashboards
 

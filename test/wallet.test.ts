@@ -5,7 +5,12 @@ import { AppStore, periodKey } from "../src/app-store.ts";
 import { AppService } from "../src/app-service.ts";
 import type { Proposal, Wallet } from "../src/app-model.ts";
 import { catalogue } from "../src/catalogue.ts";
-import { createSession, ownerFromSession } from "../src/auth.ts";
+import {
+  createSession,
+  createDemoSession,
+  isSharedDemoOwner,
+  ownerFromSession,
+} from "../src/auth.ts";
 import { PayPal } from "../src/paypal.ts";
 import { MerchantError } from "@mailbox/service-sdk";
 import { fixtureMessages, seedMessages } from "../src/seed.ts";
@@ -523,5 +528,33 @@ test("live sample sending uses only connected agent addresses and leaves other p
     if (previousKey === undefined) delete process.env.AGENTMAIL_API_KEY;
     else process.env.AGENTMAIL_API_KEY = previousKey;
     store.close();
+  }
+});
+
+test("configured demo sessions reopen one owner while unconfigured sessions stay isolated", () => {
+  const previousSecret = process.env.APP_SESSION_SECRET;
+  const previousOwner = process.env.DEMO_WORKSPACE_ID;
+  process.env.APP_SESSION_SECRET =
+    "test-session-key-that-is-long-enough-for-signing";
+  const owner = randomUUID();
+  try {
+    process.env.DEMO_WORKSPACE_ID = owner;
+    assert.equal(ownerFromSession(createDemoSession()), owner);
+    assert.equal(ownerFromSession(createDemoSession()), owner);
+    assert.equal(isSharedDemoOwner(owner), true);
+    assert.equal(isSharedDemoOwner(randomUUID()), false);
+    process.env.DEMO_WORKSPACE_ID = "";
+    assert.notEqual(
+      ownerFromSession(createDemoSession()),
+      ownerFromSession(createDemoSession()),
+    );
+    assert.equal(isSharedDemoOwner(owner), false);
+    process.env.DEMO_WORKSPACE_ID = "malformed.owner";
+    assert.throws(() => createDemoSession(), /not configured correctly/);
+  } finally {
+    if (previousSecret === undefined) delete process.env.APP_SESSION_SECRET;
+    else process.env.APP_SESSION_SECRET = previousSecret;
+    if (previousOwner === undefined) delete process.env.DEMO_WORKSPACE_ID;
+    else process.env.DEMO_WORKSPACE_ID = previousOwner;
   }
 });

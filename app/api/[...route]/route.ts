@@ -6,6 +6,8 @@ import { MerchantError } from "@mailbox/service-sdk";
 import { appService } from "../../../src/runtime";
 import {
   createSession,
+  createDemoSession,
+  isSharedDemoOwner,
   ownerFromSession,
   validAccessKey,
   cookieOptions,
@@ -295,9 +297,13 @@ export async function POST(request: NextRequest, context: Context) {
           },
           401,
         );
-      const session = createSession();
+      const session = createDemoSession();
       const demoOwner = ownerFromSession(session)!;
-      await seedMessages(service.store, demoOwner, false);
+      if (
+        !service.store.agents(demoOwner).length &&
+        !service.store.messages(demoOwner).length
+      )
+        await seedMessages(service.store, demoOwner, false);
       const result = response({ signedIn: true });
       result.cookies.set("mailbox_session", session, {
         ...cookieOptions,
@@ -390,11 +396,20 @@ export async function POST(request: NextRequest, context: Context) {
       );
     if (input.action === "reset") {
       await service.reset(account);
-      const result = response({ reset: true, paymentsRetained: true });
-      result.cookies.set("mailbox_session", createSession(), {
-        ...cookieOptions,
-        secure: request.nextUrl.protocol === "https:",
+      const workspaceRetained = isSharedDemoOwner(account);
+      const result = response({
+        reset: true,
+        paymentsRetained: true,
+        workspaceRetained,
       });
+      result.cookies.set(
+        "mailbox_session",
+        createSession(workspaceRetained ? account : undefined),
+        {
+          ...cookieOptions,
+          secure: request.nextUrl.protocol === "https:",
+        },
+      );
       return result;
     }
     const id = () => {

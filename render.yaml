@@ -32,6 +32,8 @@ services:
         generateValue: true
       - key: DEMO_ACCESS_KEY
         generateValue: true
+      - key: DEMO_WORKSPACE_ID
+        sync: false
       - key: MOCK_MERCHANT_TOKEN
         generateValue: true
       - key: MOCK_ADMIN_TOKEN

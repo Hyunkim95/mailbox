@@ -301,7 +301,9 @@ export default function Mailbox() {
         setActiveAgentId(null);
         setView("agents");
         setNotice(
-          "Fresh workspace opened. Old wallets are paused and past sandbox payments remain recorded.",
+          data.workspaceRetained
+            ? "Demo reset. Spending is paused; agent addresses, messages and payment history are kept."
+            : "Fresh workspace opened. Old wallets are paused and past sandbox payments remain recorded.",
         );
       }
       if (data.type && sameActor) {
@@ -421,7 +423,7 @@ export default function Mailbox() {
           Mailbox
         </div>
         <main className="login-card">
-          <div className="eyebrow">Private sandbox demo</div>
+          <div className="eyebrow">Sandbox demo</div>
           <h1>
             Your services.
             <br />
@@ -608,7 +610,11 @@ export default function Mailbox() {
             <span className="avatar">M</span>
             <span>
               <strong>Maya</strong>
-              <small>Private demo workspace</small>
+              <small>
+                {workspaceState.shared_demo
+                  ? "Shared demo workspace"
+                  : "Private demo workspace"}
+              </small>
             </span>
             <LogOut size={15} />
           </button>
@@ -1419,7 +1425,9 @@ export default function Mailbox() {
               onClick={() => {
                 if (
                   confirm(
-                    "Reset this demo workspace? Old wallets and rules will be paused, and controlled streaming access will be canceled. Past sandbox payments remain recorded.",
+                    workspaceState.shared_demo
+                      ? "Reset Maya’s shared demo? Spending will be paused, pending actions blocked and controlled streaming access canceled. Agent addresses and payment history stay recorded."
+                      : "Reset this demo workspace? Old wallets and rules will be paused, and controlled streaming access will be canceled. Past sandbox payments remain recorded.",
                   )
                 )
                   void command({ action: "reset" }, "reset");

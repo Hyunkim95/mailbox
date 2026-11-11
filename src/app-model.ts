@@ -156,6 +156,7 @@ export type PublicWallet = Omit<Wallet, "owner" | "vault_id" | "inbox_id"> & {
   available: number;
 };
 export type AppState = {
+  shared_demo?: boolean;
   agents: PublicAgent[];
   wallets: PublicWallet[];
   proposals: Proposal[];

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isSharedDemoOwner } from "./auth.ts";
 import {
   MerchantError,
   type Action,
@@ -59,6 +60,7 @@ export class AppService {
       }
     }
     return {
+      shared_demo: isSharedDemoOwner(owner),
       agents: this.store
         .agents(owner)
         .map((agent) => this.store.publicAgent(agent)),

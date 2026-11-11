@@ -11,9 +11,27 @@ function secret() {
     );
   return value;
 }
-export function createSession() {
-  const value = `${randomUUID()}.${Math.floor(Date.now() / 1000) + age}`;
+export function createSession(owner: string = randomUUID()) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      owner,
+    )
+  )
+    throw new MerchantError(
+      "INVALID_WORKSPACE",
+      "The demo workspace is not configured correctly.",
+    );
+  const value = `${owner}.${Math.floor(Date.now() / 1000) + age}`;
   return `${value}.${createHmac("sha256", secret()).update(value).digest("hex")}`;
+}
+export function createDemoSession() {
+  return createSession(process.env.DEMO_WORKSPACE_ID?.trim() || undefined);
+}
+export function isSharedDemoOwner(owner: string) {
+  return (
+    !!process.env.DEMO_WORKSPACE_ID?.trim() &&
+    owner === process.env.DEMO_WORKSPACE_ID.trim()
+  );
 }
 export function ownerFromSession(cookie: string | undefined): string | null {
   if (!cookie) return null;
