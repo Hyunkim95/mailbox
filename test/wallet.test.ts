@@ -430,6 +430,11 @@ test("provider inbox limit during live seeding preserves all previews and receiv
   };
   try {
     await seedMessages(store, "owner", false);
+    const agent = store.agents("owner").find((a) => a.name === "Reel")!;
+    agent.email = "reel@example.test";
+    agent.inbox_id = "reel";
+    agent.status = "connected";
+    store.saveAgent(agent);
     const preview = fixtureMessages("owner")[0]!;
     store.saveMessage({
       ...preview,
@@ -453,6 +458,66 @@ test("provider inbox limit during live seeding preserves all previews and receiv
         .provider_id,
       "received-before-failure",
     );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env.AGENTMAIL_API_KEY;
+    else process.env.AGENTMAIL_API_KEY = previousKey;
+    store.close();
+  }
+});
+
+test("live sample sending uses only connected agent addresses and leaves other previews intact", async () => {
+  const store = new AppStore(":memory:");
+  const previousKey = process.env.AGENTMAIL_API_KEY;
+  const previousFetch = globalThis.fetch;
+  process.env.AGENTMAIL_API_KEY = "fixture-key";
+  const sent: { to: string[]; subject: string }[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/send")) {
+      const body = JSON.parse(String(init?.body));
+      sent.push(body);
+      return Response.json({
+        message_id: `sent-${sent.length}`,
+        thread_id: `thread-${sent.length}`,
+      });
+    }
+    assert.equal(
+      init?.method ?? "GET",
+      "GET",
+      "must not provision new inboxes",
+    );
+    assert.match(url.pathname, /^\/v0\/inboxes\/(pantry|reel)\/messages$/);
+    return Response.json({ messages: [], count: 0, limit: 50 });
+  };
+  try {
+    await seedMessages(store, "owner", false);
+    for (const agent of store
+      .agents("owner")
+      .filter((a) => ["Pantry", "Reel"].includes(a.name))) {
+      agent.email = `${agent.name.toLowerCase()}@example.test`;
+      agent.inbox_id = agent.name.toLowerCase();
+      agent.status = "connected";
+      store.saveAgent(agent);
+    }
+    store.setSetting("merchant_sender", "merchant");
+    const result = await seedMessages(store, "owner", true);
+    assert.equal(result.sent, 12);
+    assert.equal(result.total, 12);
+    assert.equal(result.preview_retained, 12);
+    assert.equal(
+      sent.filter((m) => m.to[0] === "pantry@example.test").length,
+      6,
+    );
+    assert.equal(sent.filter((m) => m.to[0] === "reel@example.test").length, 6);
+    assert.equal(store.wallets("owner").length, 0);
+    assert.equal(store.messages("owner").length, 24);
+    assert.ok(
+      store.messages("owner").every((m) => m.origin === "fixture_preview"),
+      "a send acknowledgment is not delivery evidence",
+    );
+    assert.equal((await seedMessages(store, "owner", true)).sent, 0);
+    assert.equal(sent.length, 12, "retries must not send duplicates");
   } finally {
     globalThis.fetch = previousFetch;
     if (previousKey === undefined) delete process.env.AGENTMAIL_API_KEY;

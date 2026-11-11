@@ -13,3 +13,4 @@ playwright-report/
 next-env.d.ts
 *.tsbuildinfo
 BUILD_STATUS.md
+artifacts/

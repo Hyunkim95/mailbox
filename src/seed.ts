@@ -5,7 +5,7 @@ import type { AppStore } from "./app-store.ts";
 import type { Message } from "./app-model.ts";
 import { catalogue } from "./catalogue.ts";
 import { configured } from "./ai.ts";
-import { merchantSender, provisionAddress, syncInbox } from "./email.ts";
+import { merchantSender, syncAgentInbox } from "./email.ts";
 import { nativePromotionFacts, readEmailContent } from "./email-content.ts";
 import { sampleAgents, defaultAgent } from "./agents.ts";
 
@@ -63,7 +63,9 @@ export async function seedMessages(
     const service = catalogue.services.find(
       (service) => service.id === message.service_id,
     )!;
-    message.agent_id = defaultAgent(store, owner, service).id;
+    message.agent_id =
+      store.wallets(owner).find((wallet) => wallet.service_id === service.id)
+        ?.agent_id ?? defaultAgent(store, owner, service).id;
   }
   if (!send) {
     for (const message of messages) store.saveMessage(message);
@@ -79,27 +81,34 @@ export async function seedMessages(
       "EMAIL_NOT_CONFIGURED",
       "Add the email API key before sending the live seed.",
     );
+  const connected = new Map(
+    store
+      .agents(owner)
+      .filter((agent) => agent.email && agent.inbox_id)
+      .map((agent) => [agent.id, agent]),
+  );
+  const deliverable = messages.filter((message) =>
+    connected.has(message.agent_id!),
+  );
+  if (!deliverable.length)
+    throw new MerchantError(
+      "EMAIL_ADDRESS_REQUIRED",
+      "Create an agent address before sending sample emails. Other agents keep their labeled previews.",
+    );
   const provider = new AgentMailClient({
     apiKey: process.env.AGENTMAIL_API_KEY!,
   });
   const sender = await merchantSender(store);
-  const ids = [...new Set(messages.map((m) => m.service_id))];
-  for (const serviceId of ids) {
-    const service = catalogue.services.find((s) => s.id === serviceId)!;
-    await provisionAddress(store, store.ensureWallet(owner, service));
-  }
   let sent = 0;
-  for (const message of messages) {
+  for (const message of deliverable) {
     const key = `seed-sent:${owner}:${message.id}`,
       existing = store.setting<string>(key);
     if (existing) continue;
-    const wallet = store
-      .wallets(owner)
-      .find((w) => w.service_id === message.service_id)!;
+    const agent = connected.get(message.agent_id!)!;
     const response = await provider.inboxes.messages.send(
       sender,
       {
-        to: [wallet.email!],
+        to: [agent.email!],
         subject: message.subject,
         text: message.text,
         ...(message.html ? { html: message.html } : {}),
@@ -113,11 +122,16 @@ export async function seedMessages(
       store.setSetting(`seed-scenario:${response.messageId}`, message.scenario);
     sent++;
   }
-  for (const wallet of store.wallets(owner)) await syncInbox(store, wallet);
+  for (const agent of connected.values()) await syncAgentInbox(store, agent);
   store.log(
     owner,
     "LIVE_FIXTURES_SENT",
-    `${sent} fixture messages sent through the real provider. Only received messages are labeled received.`,
+    `${sent} sample emails sent to connected agents. Other agents keep their labeled previews. Only received messages are labeled received.`,
   );
-  return { preview: false, sent, total: messages.length };
+  return {
+    preview: false,
+    sent,
+    total: deliverable.length,
+    preview_retained: messages.length - deliverable.length,
+  };
 }

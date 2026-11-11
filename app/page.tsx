@@ -1402,9 +1402,16 @@ export default function Mailbox() {
             <button
               className="secondary"
               disabled={!!busy || !state.configuration.email}
-              onClick={() => void command({ action: "seed_live" }, "seed")}
+              onClick={() =>
+                void command({ action: "seed_live" }, "seed").then((data) => {
+                  if (data)
+                    setNotice(
+                      `${data.sent} sample emails sent to connected agents. Other agents keep their previews.`,
+                    );
+                })
+              }
             >
-              Send live fixture emails
+              Send samples to connected agents
             </button>
             <button
               className="text-button"
@@ -1422,8 +1429,9 @@ export default function Mailbox() {
             </button>
           </div>
           <p>
-            Preview mail is labeled. Live seeding sends the same 24 fixtures
-            through the email provider. Reset never erases PayPal transactions.
+            Connected agents receive their sample emails through the email
+            provider. Other agents keep labeled previews. Reset never erases
+            PayPal transactions.
           </p>
         </details>
         <footer className="app-footer">
