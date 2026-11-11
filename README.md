@@ -100,6 +100,8 @@ npm run format:check
 
 Core checks exercise actual MCP HTTP clients plus injected PayPal responses, financial limits and races, lost-response recovery, ownership, encryption, callback verification, month-end cancellation and email parsing. Browser checks use isolated databases and empty external credentials, covering proposals, credential gates, messages, comparison, saved rules, reset and phone layout. Browser builds use `.next-qa` to preserve an already-running local app's production files.
 
+A fresh public clone on Linux passed installation, private local setup, all 38 core checks and the production build. Its running server also passed generated-key login, 24-message preview loading, three MCP film options and the coffee quote, with no provider credentials or claimed payments.
+
 A live acceptance run must additionally prove saved-token charging, the real merchant callback and received email, model-backed requests, cancellation/condition behavior and the post-approval timing target. Submission claims must follow that evidence.
 
 ## Hosting and submission
