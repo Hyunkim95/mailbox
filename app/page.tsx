@@ -1,4 +1,12 @@
 "use client";
+import dynamic from "next/dynamic";
+import { MarketResults } from "./market-results";
+import { AgentHome, AgentIdentity, AgentForm } from "./agent-home";
+import type { MarketResult } from "../src/market";
+const NicheDashboard = dynamic(() => import("./niche-dashboard"), {
+  ssr: false,
+  loading: () => <p>Opening your dashboard…</p>,
+});
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowUpRight,
@@ -6,6 +14,7 @@ import {
   Mail,
   Wallet as WalletIcon,
   LayoutGrid,
+  BarChart3,
   Clock,
   Check,
   ChevronRight,
@@ -32,6 +41,7 @@ import type {
   PublicWallet,
   Proposal,
   Message,
+  PublicAgent,
 } from "../src/app-model";
 import { WalletRuleForm } from "./wallet-rule-form";
 
@@ -45,7 +55,8 @@ type Option = {
   category: string;
 };
 type Result = {
-  type: "options" | "answer" | "proposal";
+  type: "options" | "answer" | "proposal" | "market";
+  market?: MarketResult;
   title?: string;
   options?: Option[];
   answer?: string;
@@ -105,11 +116,69 @@ function ServiceMark({ category }: { category: string }) {
 }
 
 export default function Mailbox() {
-  const [state, setState] = useState<AppState | null>(null),
+  const [workspaceState, setState] = useState<AppState | null>(null),
     [needsLogin, setNeedsLogin] = useState(false),
     [loginKey, setLoginKey] = useState("");
-  const [view, setView] = useState("services"),
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [agentForm, setAgentForm] = useState<"create" | PublicAgent | null>(
+    null,
+  );
+  const activeAgent = workspaceState?.agents?.find(
+    (agent) => agent.id === activeAgentId,
+  );
+  const actorRef = useRef<string | null>(null);
+  useEffect(() => {
+    actorRef.current = activeAgentId;
+  }, [activeAgentId]);
+  const state: AppState | null =
+    workspaceState && activeAgent
+      ? {
+          ...workspaceState,
+          wallets: workspaceState.wallets.filter(
+            (wallet) =>
+              wallet.agent_id === activeAgent.id ||
+              (!wallet.agent_id && activeAgent.template === wallet.category),
+          ),
+          proposals: workspaceState.proposals.filter(
+            (proposal) =>
+              proposal.agent_id === activeAgent.id ||
+              (!proposal.agent_id &&
+                workspaceState.wallets.some(
+                  (wallet) =>
+                    wallet.id === proposal.wallet_id &&
+                    (wallet.agent_id === activeAgent.id ||
+                      (!wallet.agent_id &&
+                        activeAgent.template === wallet.category)),
+                )),
+          ),
+          messages: workspaceState.messages.filter(
+            (message) => message.agent_id === activeAgent.id,
+          ),
+          audit: workspaceState.audit.filter(
+            (event) =>
+              !event.service_id ||
+              workspaceState.wallets.some(
+                (wallet) =>
+                  wallet.service_id === event.service_id &&
+                  (wallet.agent_id === activeAgent.id ||
+                    (!wallet.agent_id &&
+                      activeAgent.template === wallet.category)),
+              ),
+          ),
+        }
+      : workspaceState;
+  function openAgent(id: string) {
+    setActiveAgentId(id);
+    setView("services");
+    setResult(null);
+    setAsk("");
+    setSelectedService(null);
+    setError("");
+    setNotice("");
+  }
+  const [view, setView] = useState("agents"),
     [ask, setAsk] = useState(""),
+    [searchScope, setSearchScope] = useState("services"),
     [result, setResult] = useState<Result | null>(null),
     [busy, setBusy] = useState<string | null>(null),
     [error, setError] = useState(""),
@@ -133,6 +202,10 @@ export default function Mailbox() {
   useEffect(() => {
     void refresh();
     const query = new URLSearchParams(location.search);
+    if (query.get("agent")) {
+      setActiveAgentId(query.get("agent"));
+      setView("services");
+    }
     if (query.get("error")) setError(query.get("error")!);
     if (query.get("result"))
       setNotice(
@@ -151,6 +224,19 @@ export default function Mailbox() {
     return () => clearInterval(timer);
   }, []);
   async function command(payload: Record<string, unknown>, label = "request") {
+    const requestedActor = activeAgentId;
+    if (
+      activeAgentId &&
+      [
+        "ask",
+        "propose",
+        "market_search",
+        "studio_turn",
+        "studio_save",
+      ].includes(String(payload.action)) &&
+      !payload.agent_id
+    )
+      payload = { ...payload, agent_id: activeAgentId };
     setBusy(label);
     setError("");
     try {
@@ -162,19 +248,29 @@ export default function Mailbox() {
       const data = await response.json();
       if (!response.ok)
         throw new Error(data.message ?? "This request could not be completed.");
-      if (data.type === "redirect") {
+      const sameActor = !requestedActor || actorRef.current === requestedActor;
+      if (data.type === "redirect" && sameActor) {
         location.assign(data.url);
         return data;
+      }
+      if (data.signedIn) {
+        setActiveAgentId(null);
+        setView("agents");
+        setResult(null);
       }
       if (data.reset) {
         setResult(null);
         setSelectedService(null);
+        setActiveAgentId(null);
+        setView("agents");
         setNotice(
           "Fresh workspace opened. Old wallets are paused and past sandbox payments remain recorded.",
         );
       }
-      if (data.type) {
-        setResult(data);
+      if (data.type && sameActor) {
+        setResult(
+          data.type === "market" ? { type: "market", market: data } : data,
+        );
         if (data.type === "options")
           setSelectedOption(
             data.options.some((o: Option) => o.id === "coast-screen")
@@ -186,6 +282,9 @@ export default function Mailbox() {
       return data;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Please try again.");
+      try {
+        await refresh();
+      } catch {}
       return null;
     } finally {
       setBusy(null);
@@ -199,9 +298,14 @@ export default function Mailbox() {
     const text = example?.text ?? ask.trim();
     if (!text) return;
     setAsk(text);
+    if (example) setSearchScope("services");
     setView("services");
     await command(
-      { action: "ask", text, ...(example ? { example: example.id } : {}) },
+      {
+        action: !example && searchScope === "market" ? "market_search" : "ask",
+        text,
+        ...(example ? { example: example.id } : {}),
+      },
       "ask",
     );
   }
@@ -345,9 +449,16 @@ export default function Mailbox() {
         <span className="sidebar-label">Your space</span>
         <nav>
           {[
-            { id: "services", label: "My services", icon: LayoutGrid },
-            { id: "activity", label: "Wallet activity", icon: WalletIcon },
-            { id: "messages", label: "Service messages", icon: Mail },
+            { id: "agents", label: "Your agents", icon: LayoutGrid },
+            ...(activeAgent
+              ? [
+                  { id: "services", label: "Overview", icon: LayoutGrid },
+                  { id: "messages", label: "Inbox", icon: Mail },
+                  { id: "dashboards", label: "Dashboard", icon: BarChart3 },
+                  { id: "connections", label: "Services", icon: Mail },
+                  { id: "activity", label: "Activity", icon: WalletIcon },
+                ]
+              : [{ id: "messages", label: "All messages", icon: Mail }]),
             { id: "inbox", label: "Before Mailbox", icon: FileText },
           ].map((item) => (
             <button
@@ -355,6 +466,10 @@ export default function Mailbox() {
               className={view === item.id ? "nav-item active" : "nav-item"}
               onClick={() => {
                 setView(item.id);
+                if (item.id === "agents" || item.id === "inbox") {
+                  setActiveAgentId(null);
+                  setResult(null);
+                }
                 setSelectedService(null);
               }}
             >
@@ -366,10 +481,30 @@ export default function Mailbox() {
             </button>
           ))}
         </nav>
+        <div className="sidebar-agents">
+          <span className="sidebar-label">Your agents</span>
+          {workspaceState?.agents?.map((agent) => (
+            <button
+              key={agent.id}
+              className={activeAgentId === agent.id ? "active" : ""}
+              onClick={() => openAgent(agent.id)}
+            >
+              <span>{agent.name[0]?.toUpperCase()}</span>
+              {agent.name}
+              <small>
+                {
+                  workspaceState.messages.filter(
+                    (message) => message.agent_id === agent.id,
+                  ).length
+                }
+              </small>
+            </button>
+          ))}
+        </div>
         <div className="sidebar-bottom">
           <div className="demo-label">
             <span />
-            Seeded service demo
+            Sample service scenario
           </div>
           <p>
             Real MCP interfaces.
@@ -397,18 +532,24 @@ export default function Mailbox() {
           </span>
           <span className="breadcrumb">
             Maya’s space <ChevronRight size={13} />{" "}
-            {view === "services"
-              ? "My services"
-              : view === "activity"
-                ? "Wallet activity"
-                : view === "inbox"
-                  ? "Before Mailbox"
-                  : "Service messages"}
+            {view === "agents"
+              ? "Your agents"
+              : activeAgent
+                ? `${activeAgent.name} · ${view === "services" ? "Overview" : view === "dashboards" ? "Dashboard" : view === "connections" ? "Services" : view === "activity" ? "Activity" : "Inbox"}`
+                : view === "services"
+                  ? "My services"
+                  : view === "activity"
+                    ? "Wallet activity"
+                    : view === "dashboards"
+                      ? "Niche dashboards"
+                      : view === "inbox"
+                        ? "Before Mailbox"
+                        : "Service messages"}
           </span>
           <div className="top-actions">
             <span className="sandbox-pill">
               <span />
-              Sandbox
+              PayPal sandbox
             </span>
             <button
               className="icon-button"
@@ -438,29 +579,92 @@ export default function Mailbox() {
               </button>
             </div>
           )}
-          {view === "services" && (
+          {activeAgent && view !== "agents" && (
+            <>
+              <AgentIdentity
+                agent={activeAgent}
+                busy={!!busy}
+                onConnect={() =>
+                  void command(
+                    { action: "connect_agent", agent_id: activeAgent.id },
+                    "connect-agent",
+                  ).then((result) => {
+                    if (result)
+                      setNotice(
+                        `${activeAgent.name}’s address is ready. Use it for the services you choose.`,
+                      );
+                  })
+                }
+                onEdit={() => setAgentForm(activeAgent)}
+              />
+              <nav className="agent-workspace-tabs" aria-label="Agent sections">
+                {[
+                  { id: "services", label: "Overview" },
+                  { id: "messages", label: "Inbox" },
+                  { id: "dashboards", label: "Dashboard" },
+                  { id: "connections", label: "Services" },
+                  { id: "activity", label: "Activity" },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    aria-pressed={view === tab.id}
+                    onClick={() => {
+                      setView(tab.id);
+                      setSelectedService(null);
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </nav>
+            </>
+          )}
+          {view === "agents" && workspaceState && (
+            <AgentHome
+              state={workspaceState}
+              onOpen={openAgent}
+              onCreate={() => setAgentForm("create")}
+              onLoadDemo={() =>
+                void command({ action: "seed_preview" }, "seed")
+              }
+            />
+          )}
+          {view === "dashboards" && (
+            <NicheDashboard
+              key={activeAgent?.id ?? "all"}
+              state={state}
+              {...(activeAgent ? { agent: activeAgent } : {})}
+            />
+          )}
+          {(view === "services" || view === "connections") && (
             <>
               <div className="page-heading">
                 <div>
                   <div className="eyebrow">A little less noise</div>
-                  <h1>
-                    {priorityProposal
-                      ? "Confirming your payment."
-                      : result?.type === "options"
-                        ? "Choose your service."
-                        : result?.type === "answer"
-                          ? "Here’s what I found."
-                          : activeProposal?.status === "PAID"
-                            ? "Your service is ready."
-                            : activeProposal?.status === "WAITING"
-                              ? "Your rule is watching."
-                              : activeProposal &&
-                                  !["DECLINED", "BLOCKED", "EXPIRED"].includes(
-                                    activeProposal.status,
-                                  )
-                                ? "Review your proposal."
-                                : "What would you like to do?"}
-                  </h1>
+                  <h2>
+                    {view === "connections"
+                      ? "Services"
+                      : priorityProposal
+                        ? "Confirming your payment."
+                        : result?.type === "options"
+                          ? "Choose your service."
+                          : result?.type === "market"
+                            ? "Here’s what I found."
+                            : result?.type === "answer"
+                              ? "Here’s what I found."
+                              : activeProposal?.status === "PAID"
+                                ? "Your service is ready."
+                                : activeProposal?.status === "WAITING"
+                                  ? "Your rule is watching."
+                                  : activeProposal &&
+                                      ![
+                                        "DECLINED",
+                                        "BLOCKED",
+                                        "EXPIRED",
+                                      ].includes(activeProposal.status)
+                                    ? "Review your proposal."
+                                    : `What would you like ${activeAgent?.name ?? "your agent"} to do?`}
+                  </h2>
                   <p>
                     Ask across your services. Every wallet acts on your terms.
                   </p>
@@ -473,204 +677,257 @@ export default function Mailbox() {
                   })}
                 </span>
               </div>
-              <section className="ask-surface">
-                <form className="ask-form" onSubmit={(e) => void submitAsk(e)}>
-                  <label className="sr-only" htmlFor="ask">
-                    Ask Mailbox
-                  </label>
-                  <Search size={21} />
-                  <input
-                    id="ask"
-                    value={ask}
-                    onChange={(e) => setAsk(e.target.value)}
-                    placeholder="I want to watch The Lantern Coast…"
-                    disabled={busy === "ask"}
-                  />
-                  <button
-                    type="submit"
-                    className="ask-submit"
-                    aria-label="Send request"
-                    disabled={!!busy || !ask.trim()}
+              <div hidden={view === "connections"}>
+                <section className="ask-surface">
+                  <div
+                    className="search-scope"
+                    role="group"
+                    aria-label="Search scope"
                   >
-                    {busy === "ask" ? (
-                      <LoaderCircle className="spin" size={20} />
-                    ) : (
-                      <ArrowUp size={20} />
-                    )}
-                  </button>
-                </form>
-                <div className="example-row">
-                  {samples.map((sample) => (
-                    <button
-                      key={sample.id}
-                      onClick={() => void submitAsk(undefined, sample)}
-                      disabled={!!busy}
-                    >
-                      <sample.icon size={14} />
-                      {sample.label}
-                      <ArrowUpRight size={12} />
-                    </button>
-                  ))}
-                </div>
-              </section>
-              {!state.configuration.model && (
-                <p className="connection-note">
-                  Custom requests are not connected yet. The buttons above open
-                  clearly labeled fixture walkthroughs.
-                </p>
-              )}
-              {busy === "ask" && (
-                <div className="thinking">
-                  <LoaderCircle size={17} className="spin" />
-                  Checking your services and their terms…
-                </div>
-              )}
-              {result?.engine === "fixture" && (
-                <div className="walkthrough-label">
-                  Fixture walkthrough · no model call
-                </div>
-              )}
-              {result?.type === "options" && !priorityProposal && (
-                <section className="result-section">
-                  <div className="section-heading">
-                    <h2>{result.title}</h2>
-                    <button
-                      className="text-button"
-                      onClick={() => setResult(null)}
-                    >
-                      Close <X size={14} />
-                    </button>
-                  </div>
-                  <div className="plan-options">
-                    {result.options?.map((option) => (
+                    {[
+                      { id: "services", label: "My services" },
+                      { id: "market", label: "Across the market" },
+                    ].map((scope) => (
                       <button
-                        key={option.id}
-                        className={`plan-option ${selectedOption === option.id ? "selected" : ""}`}
-                        aria-pressed={selectedOption === option.id}
-                        onClick={() => setSelectedOption(option.id)}
+                        type="button"
+                        key={scope.id}
+                        aria-pressed={searchScope === scope.id}
+                        onClick={() => {
+                          setSearchScope(scope.id);
+                          setResult(null);
+                        }}
+                        disabled={!!busy}
                       >
-                        <span className="plan-top">
-                          <ServiceMark category={option.category} />
-                          <span className="radio-dot">
-                            {selectedOption === option.id && <span />}
-                          </span>
-                        </span>
-                        <strong>{option.name}</strong>
-                        <span className="plan-price">
-                          {money(option.amount)}
-                          <small>
-                            {option.kind === "subscription"
-                              ? " / month"
-                              : option.kind === "booking"
-                                ? " deposit"
-                                : " once"}
-                          </small>
-                        </span>
-                        <span className="plan-terms">{option.terms}</span>
-                        {option.kind === "subscription" && (
-                          <span className="plan-foot">
-                            <Clock size={12} />
-                            One month, then cancel
-                          </span>
-                        )}
+                        {scope.label}
                       </button>
                     ))}
                   </div>
-                  <div className="result-action">
-                    <p>
-                      <ShieldCheck size={16} /> Your wallet limits apply to
-                      every action.
-                    </p>
+                  <form
+                    className="ask-form"
+                    onSubmit={(e) => void submitAsk(e)}
+                  >
+                    <label className="sr-only" htmlFor="ask">
+                      {activeAgent ? `Ask ${activeAgent.name}` : "Ask Mailbox"}
+                    </label>
+                    <Search size={21} />
+                    <input
+                      id="ask"
+                      value={ask}
+                      onChange={(e) => setAsk(e.target.value)}
+                      placeholder={
+                        searchScope === "market"
+                          ? "Find coffee beans under $15…"
+                          : "I want to watch The Lantern Coast…"
+                      }
+                      disabled={busy === "ask"}
+                    />
                     <button
-                      className="primary"
-                      disabled={!!busy || !selectedOption}
-                      onClick={() => {
-                        const o = result.options?.find(
-                          (o) => o.id === selectedOption,
-                        );
-                        if (o?.kind === "booking")
-                          void submitAsk(undefined, samples[2]);
-                        else
-                          void command(
-                            {
-                              action: "propose",
-                              service_id: selectedOption,
-                              kind:
-                                o?.kind === "subscription"
-                                  ? "subscribe"
-                                  : "buy",
-                            },
-                            "propose",
-                          );
-                      }}
+                      type="submit"
+                      className="ask-submit"
+                      aria-label="Send request"
+                      disabled={!!busy || !ask.trim()}
                     >
-                      {busy === "propose" ? (
-                        <LoaderCircle className="spin" size={17} />
+                      {busy === "ask" ? (
+                        <LoaderCircle className="spin" size={20} />
                       ) : (
-                        <>
-                          Review proposal <ArrowRight size={17} />
-                        </>
+                        <ArrowUp size={20} />
                       )}
                     </button>
-                  </div>
-                </section>
-              )}
-              {result?.type === "answer" && !priorityProposal && (
-                <section className="answer-card">
-                  <div className="eyebrow">From your services</div>
-                  <h2>{result.answer}</h2>
-                  {!!result.sources?.length && (
-                    <div className="source-links">
-                      {result.sources.map((id) => {
-                        const m = state.messages.find((m) => m.id === id);
-                        return m ? (
-                          <button key={id} onClick={() => setOpenMessage(m)}>
-                            <Mail size={13} />
-                            {m.subject}
-                            <ArrowUpRight size={12} />
-                          </button>
-                        ) : null;
-                      })}
+                  </form>
+                  {searchScope === "services" && (
+                    <div className="example-row">
+                      {samples.map((sample) => (
+                        <button
+                          key={sample.id}
+                          onClick={() => void submitAsk(undefined, sample)}
+                          disabled={!!busy}
+                        >
+                          <sample.icon size={14} />
+                          {sample.label}
+                          <ArrowUpRight size={12} />
+                        </button>
+                      ))}
                     </div>
                   )}
                 </section>
-              )}
-              {activeProposal &&
-                !["DECLINED", "BLOCKED", "EXPIRED"].includes(
-                  activeProposal.status,
-                ) &&
-                proposalWallet &&
-                (!!priorityProposal ||
-                  (result?.type !== "options" &&
-                    result?.type !== "answer")) && (
-                  <ProposalCard
-                    errorMessage={error}
-                    proposal={activeProposal}
-                    wallet={proposalWallet}
-                    busy={!!busy}
-                    sourceMessages={state.messages.filter((m) =>
-                      activeProposal.sources.includes(m.id),
-                    )}
-                    onSource={(id) =>
-                      setOpenMessage(
-                        state.messages.find((m) => m.id === id) ?? null,
-                      )
-                    }
-                    onApprove={(rules) =>
-                      void command(
-                        { action: "approve", id: activeProposal.id, rules },
-                        "approve",
-                      )
-                    }
-                    onDecline={() =>
-                      void command(
-                        { action: "decline", id: activeProposal.id },
-                        "decline",
-                      )
-                    }
-                    onRefresh={() => void command({ action: "sync" }, "sync")}
-                  />
+                {searchScope === "services" && !state.configuration.model && (
+                  <p className="connection-note">
+                    Custom requests are not connected yet. The buttons above
+                    open clearly labeled fixture walkthroughs.
+                  </p>
                 )}
+                {busy === "ask" && (
+                  <div className="thinking">
+                    <LoaderCircle size={17} className="spin" />
+                    {searchScope === "market"
+                      ? "Searching products through Channel3…"
+                      : "Checking your services and their terms…"}
+                  </div>
+                )}
+                {result?.type === "market" &&
+                  result.market &&
+                  !priorityProposal && <MarketResults result={result.market} />}
+                {result?.engine === "fixture" && (
+                  <div className="walkthrough-label">
+                    Fixture walkthrough · no model call
+                  </div>
+                )}
+                {result?.type === "options" && !priorityProposal && (
+                  <section className="result-section">
+                    <div className="section-heading">
+                      <h2>{result.title}</h2>
+                      <button
+                        className="text-button"
+                        onClick={() => setResult(null)}
+                      >
+                        Close <X size={14} />
+                      </button>
+                    </div>
+                    <div className="plan-options">
+                      {result.options?.map((option) => (
+                        <button
+                          key={option.id}
+                          className={`plan-option ${selectedOption === option.id ? "selected" : ""}`}
+                          aria-pressed={selectedOption === option.id}
+                          onClick={() => setSelectedOption(option.id)}
+                        >
+                          <span className="plan-top">
+                            <ServiceMark category={option.category} />
+                            <span className="radio-dot">
+                              {selectedOption === option.id && <span />}
+                            </span>
+                          </span>
+                          <strong>{option.name}</strong>
+                          <span className="plan-price">
+                            {money(option.amount)}
+                            <small>
+                              {option.kind === "subscription"
+                                ? " / month"
+                                : option.kind === "booking"
+                                  ? " deposit"
+                                  : " once"}
+                            </small>
+                          </span>
+                          <span className="plan-terms">{option.terms}</span>
+                          {option.kind === "subscription" && (
+                            <span className="plan-foot">
+                              <Clock size={12} />
+                              One month, then cancel
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="result-action">
+                      <p>
+                        <ShieldCheck size={16} /> Your wallet limits apply to
+                        every action.
+                      </p>
+                      <button
+                        className="primary"
+                        disabled={!!busy || !selectedOption}
+                        onClick={() => {
+                          const o = result.options?.find(
+                            (o) => o.id === selectedOption,
+                          );
+                          if (o?.kind === "booking")
+                            void submitAsk(undefined, samples[2]);
+                          else
+                            void command(
+                              {
+                                action: "propose",
+                                service_id: selectedOption,
+                                kind:
+                                  o?.kind === "subscription"
+                                    ? "subscribe"
+                                    : "buy",
+                              },
+                              "propose",
+                            );
+                        }}
+                      >
+                        {busy === "propose" ? (
+                          <LoaderCircle className="spin" size={17} />
+                        ) : (
+                          <>
+                            Review proposal <ArrowRight size={17} />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </section>
+                )}
+                {result?.type === "answer" && !priorityProposal && (
+                  <section className="answer-card">
+                    <div className="eyebrow">From your services</div>
+                    <h2>{result.answer}</h2>
+                    {!!result.sources?.length && (
+                      <div className="source-links">
+                        {result.sources.map((id) => {
+                          const m = state.messages.find((m) => m.id === id);
+                          return m ? (
+                            <button key={id} onClick={() => setOpenMessage(m)}>
+                              <Mail size={13} />
+                              {m.subject}
+                              <ArrowUpRight size={12} />
+                            </button>
+                          ) : null;
+                        })}
+                      </div>
+                    )}
+                  </section>
+                )}
+                {activeProposal &&
+                  !["DECLINED", "BLOCKED", "EXPIRED"].includes(
+                    activeProposal.status,
+                  ) &&
+                  proposalWallet &&
+                  (!!priorityProposal ||
+                    (result?.type !== "options" &&
+                      result?.type !== "answer" &&
+                      result?.type !== "market")) && (
+                    <ProposalCard
+                      {...(activeAgent
+                        ? {
+                            agent: activeAgent,
+                            onConnectAgent: () =>
+                              void command(
+                                {
+                                  action: "connect_agent",
+                                  agent_id: activeAgent.id,
+                                },
+                                "connect-agent",
+                              ),
+                          }
+                        : {})}
+                      errorMessage={error}
+                      proposal={activeProposal}
+                      wallet={proposalWallet}
+                      busy={!!busy}
+                      sourceMessages={state.messages.filter((m) =>
+                        activeProposal.sources.includes(m.id),
+                      )}
+                      onSource={(id) =>
+                        setOpenMessage(
+                          state.messages.find((m) => m.id === id) ?? null,
+                        )
+                      }
+                      onApprove={(rules) =>
+                        void command(
+                          { action: "approve", id: activeProposal.id, rules },
+                          "approve",
+                        )
+                      }
+                      onDecline={() =>
+                        void command(
+                          { action: "decline", id: activeProposal.id },
+                          "decline",
+                        )
+                      }
+                      onRefresh={() => void command({ action: "sync" }, "sync")}
+                    />
+                  )}
+              </div>
               <section className="services-section">
                 <div className="section-heading">
                   <div>
@@ -959,7 +1216,21 @@ export default function Mailbox() {
                       </span>
                       <span>
                         <strong>{m.subject}</strong>
-                        <small>{m.from}</small>
+                        <small>
+                          {m.from}
+                          <span className="email-type">
+                            {m.facts.suspicious
+                              ? "Flagged"
+                              : m.kind === "offer" &&
+                                  m.facts.expires &&
+                                  new Date(m.facts.expires) < new Date()
+                                ? "Expired offer"
+                                : m.kind}
+                          </span>
+                          {m.format === "html" && (
+                            <span className="email-type">HTML</span>
+                          )}
+                        </small>
                         <p>{m.text.slice(0, 130)}</p>
                       </span>
                       <span className="message-date">
@@ -1138,7 +1409,94 @@ export default function Mailbox() {
               authorized.
             </div>
           )}
-          <pre>{openMessage.text}</pre>
+          <div className="email-extraction">
+            <h3>What Mailbox found</h3>
+            <dl>
+              <div>
+                <dt>Message type</dt>
+                <dd>{openMessage.kind}</dd>
+              </div>
+              {openMessage.facts.item && (
+                <div>
+                  <dt>Item</dt>
+                  <dd>{openMessage.facts.item}</dd>
+                </div>
+              )}
+              {openMessage.facts.amount_minor !== null && (
+                <div>
+                  <dt>Amount in email</dt>
+                  <dd>{money(openMessage.facts.amount_minor)}</dd>
+                </div>
+              )}
+              {openMessage.facts.expires && (
+                <div>
+                  <dt>Offer expiry</dt>
+                  <dd>
+                    {date(openMessage.facts.expires)}
+                    {new Date(openMessage.facts.expires) < new Date()
+                      ? " · expired"
+                      : ""}
+                  </dd>
+                </div>
+              )}
+            </dl>
+            {openMessage.scenario && (
+              <p className="email-scenario">
+                Demo variant: {openMessage.scenario}
+              </p>
+            )}
+          </div>
+          {openMessage.html && (
+            <iframe
+              className="email-preview"
+              title="Original email preview"
+              sandbox=""
+              srcDoc={
+                "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\"><style>body{font:15px/1.65 system-ui;padding:24px;color:#23372c}h1{font-size:28px}h2{font-size:21px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:12px;text-align:left}</style>" +
+                openMessage.html
+              }
+            />
+          )}
+          <details open={!openMessage.html}>
+            <summary>
+              {openMessage.html ? "Extracted text" : "Original message"}
+            </summary>
+            <pre>{openMessage.text}</pre>
+          </details>
+        </NativeDialog>
+      )}
+      {agentForm && (
+        <NativeDialog
+          title={agentForm === "create" ? "Create an agent" : "Edit agent"}
+          onClose={() => setAgentForm(null)}
+        >
+          <AgentForm
+            {...(agentForm !== "create" ? { initial: agentForm } : {})}
+            busy={!!busy}
+            error={error}
+            onCancel={() => setAgentForm(null)}
+            onSubmit={async (details) => {
+              const created = await command(
+                {
+                  action:
+                    agentForm === "create" ? "create_agent" : "update_agent",
+                  ...details,
+                  ...(agentForm !== "create" ? { agent_id: agentForm.id } : {}),
+                },
+                "agent",
+              );
+              if (!created?.agent) return;
+              if (agentForm === "create") {
+                const connected = await command(
+                  { action: "connect_agent", agent_id: created.agent.id },
+                  "connect-agent",
+                );
+                if (!connected) return;
+              }
+              setAgentForm(null);
+              openAgent(created.agent.id);
+            }}
+          />
         </NativeDialog>
       )}
       {showSdk && (
@@ -1270,14 +1628,18 @@ export default function Mailbox() {
       )}
       <nav className="mobile-nav">
         {[
-          { id: "services", label: "Services", icon: LayoutGrid },
+          { id: "agents", label: "Agents", icon: LayoutGrid },
           { id: "activity", label: "Wallets", icon: WalletIcon },
+          { id: "dashboards", label: "Dashboards", icon: BarChart3 },
           { id: "messages", label: "Messages", icon: Mail },
         ].map((item) => (
           <button
             key={item.id}
             className={view === item.id ? "active" : ""}
-            onClick={() => setView(item.id)}
+            onClick={() => {
+              setView(item.id);
+              if (item.id === "agents") setActiveAgentId(null);
+            }}
           >
             <item.icon size={19} />
             {item.label}
@@ -1289,6 +1651,8 @@ export default function Mailbox() {
 }
 
 function ProposalCard({
+  agent,
+  onConnectAgent,
   proposal: p,
   wallet: w,
   busy,
@@ -1300,6 +1664,8 @@ function ProposalCard({
   onSource,
 }: {
   proposal: Proposal;
+  agent?: PublicAgent;
+  onConnectAgent?: () => void;
   wallet: PublicWallet;
   busy: boolean;
   onApprove: (rules: Record<string, unknown>) => void;
@@ -1444,6 +1810,23 @@ function ProposalCard({
         )}
       </div>
       <div className="proposal-wallet">
+        {agent && (
+          <div className="proposal-actor">
+            <span>Acting as {agent.name}</span>
+            <strong>
+              {agent.email ?? "Create this agent’s address first"}
+            </strong>
+            {!agent.email && onConnectAgent && (
+              <button
+                className="text-button"
+                onClick={onConnectAgent}
+                disabled={busy}
+              >
+                Create agent address
+              </button>
+            )}
+          </div>
+        )}
         <div className="wallet-label">
           <WalletIcon size={16} />
           {w.name} wallet

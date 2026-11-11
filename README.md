@@ -1,8 +1,8 @@
 # Mailbox
 
-An address for the messages. A wallet for the decisions.
+An address for each agent. A clear home for its services and decisions.
 
-Mailbox is a consumer service dashboard with an ask bar, source-backed proposals and configurable PayPal spending permission. Its reference demo follows Maya through one month of a fictional streaming service with cancellation arranged, then coffee, a restaurant deposit and a conditional pet-food purchase.
+Mailbox gives named agents their own email addresses and workspaces, with source-backed proposals and configurable PayPal spending permission. Users choose which services and subscriptions belong under each agent. Its reference demo follows Maya through one month of a fictional streaming service with cancellation arranged, then coffee, a restaurant deposit and a conditional pet-food purchase.
 
 The mock services use a real MCP server and the reusable [service SDK](packages/service-sdk/README.md). All services, products, the film and background emails are invented fixtures. Real-world merchant adoption and universal service coverage are not claimed.
 
@@ -41,15 +41,17 @@ Fill `.env` using `.env.example`:
 | `AI_PROVIDER` | `openai` or `anthropic`; blank auto-selects Claude when only its key is configured |
 | `OPENAI_API_KEY`, optional `OPENAI_MODEL` | OpenAI request interpretation and email extraction |
 | `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL` | Alternative Claude request interpretation and email extraction |
+| `CHANNEL3_API_KEY` | Live product search and retailer offers |
+| `NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY` | AG Studio trial/production license, supplied at build time |
 | `RENDER_API_KEY`, `RENDER_OWNER_ID` | Hosting setup, if using Render |
 
-Four service addresses plus merchant sending need sufficient inbox capacity. Do not assume the three-inbox free plan covers the full demonstration. Model-backed requests, provider delivery, real Vault charging and hosted execution must be verified with the actual configured accounts. Offline tests use explicit provider fixtures and do not establish sandbox acceptance.
+Four sample-agent addresses plus merchant sending need sufficient inbox capacity. Each agent address can be reused across multiple service signups. Do not assume the three-inbox free plan covers the full demonstration. Model-backed requests, provider delivery, real Vault charging and hosted execution must be verified with the actual configured accounts. Offline tests use explicit provider fixtures and do not establish sandbox acceptance.
 
 Without service credentials, the app supports clearly labeled fixture walkthroughs and preview emails. It does not invent completed payments, received mail or model calls. Choose one provider, with no automatic billing fallback. OpenAI defaults to `gpt-6.1-sol`; Claude defaults to `claude-sonnet-5-5`. Override through `OPENAI_MODEL` or `ANTHROPIC_MODEL`. To use Anthropic API credits, set `AI_PROVIDER=anthropic` and fill `ANTHROPIC_API_KEY`. Both providers use constrained JSON output and local schema validation; neither receives payment or action tools.
 
 ## Demonstration data and reset
 
-Open **Demo setup** in the app. **Load preview emails** loads the 24 committed message fixtures with preview labels. **Send live fixture emails** provisions the owned service inboxes and sends those same fixtures through AgentMail. Merchant confirmations are live outbox messages following verified capture. Both the service view and generic before-inbox use the same stored data.
+The private demo starts with four sample agents and 24 labeled email fixtures. **Demo setup → Load preview emails** refreshes those same fixtures. Variants include plain text, HTML newsletters and hidden preheaders, an unpaid invoice, receipts, renewal and cancellation notices, expired prices, a wrong pet-food variant and malicious instructions. **Send live fixture emails** provisions the owned service inboxes and sends those same fixtures through AgentMail. Merchant confirmations are live outbox messages following verified capture. Both the service view and generic before-inbox use the same stored data.
 
 **Reset workspace** disables the old workspace's queued authority and cancels controlled streaming access, then starts a fresh private workspace. It retains historical sandbox payments and cannot silently discard an uncertain in-flight payment. Seeding and replay are idempotent within their recorded request identities.
 
@@ -73,7 +75,7 @@ The raw-email extractor has no tools. Model output cannot grant permissions, cho
 
 Coffee comparison checks equivalent pack variants by unit price, rejects stale email evidence, verifies stock/current quotes and applies wallet limits. Its scope is displayed; it is not represented as a global retail search. HTML extraction retains hidden preheaders. Image-only content and attachments are marked unread; OCR/vision/PDF handling remains follow-on work.
 
-Email supplies context. A supported service connector supplies actions. MCP standardizes only the tools a service actually exposes and authorizes. Channel3 is a proposed optional discovery source, not an implemented universal checkout path.
+Email supplies context. A supported service connector supplies actions. MCP standardizes only the tools a service actually exposes and authorizes. Channel3 is integrated for live product discovery and priced retailer offers. A tested headphones query returned real products; tested coffee-food queries had no suitable matches. Public Channel3 checkout remains early access, so retailer links are discovery handoffs, not proof of an alias-enforced or PayPal-funded agent purchase. Controlled MCP checkout keeps the selected agent alias through merchant activation and receipt delivery.
 
 ## MCP interface
 
@@ -104,7 +106,13 @@ Core checks exercise actual MCP HTTP clients plus injected PayPal responses, fin
 
 A fresh public clone on Linux passed installation, private local setup, all 38 core checks and the production build. Its running server also passed generated-key login, 24-message preview loading, three MCP film options and the coffee quote, with no provider credentials or claimed payments.
 
-Current checks: 44 core tests and seven browser scenarios pass. A real `gpt-6.1-sol` API run also passed request interpretation and extraction of separate discount and cashback values. Claude requests pass injected SDK transport tests; a real Anthropic call is pending its API key. A live acceptance run must additionally prove saved-token charging, the real merchant callback and received email, full model-backed application requests, cancellation/condition behavior and the post-approval timing target. Submission claims must follow that evidence.
+Current checks: 50 core tests and ten browser scenarios pass. A real `gpt-6.1-sol` API run also passed request interpretation and extraction of separate discount and cashback values. Claude requests pass injected SDK transport tests; a real Anthropic call is pending its API key. A live acceptance run must additionally prove saved-token charging, the real merchant callback and received email, full model-backed application requests, cancellation/condition behavior and the post-approval timing target. Submission claims must follow that evidence.
+
+## Agent dashboards
+
+Open an agent, then **Dashboard**. AG Studio renders its wallet, proposal and email data. Its Agent Framework uses a single bounded dashboard agent through a server-side model proxy; model keys never reach the browser. Natural-language edits are previewed, saved per owner and agent, and can be reset. A real OpenAI-driven chart creation and save passed a live local check.
+
+AG Studio is a commercial dependency. Local evaluation works without a key, with its watermark; a [trial or production license](https://www.ag-grid.com/studio/react/enterprise-licence/) is required for hosted use. Put the license, including AI access, in `NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY` before building. The MIT license covers this project's own code, not third-party commercial dependencies.
 
 ## Hosting and submission
 
@@ -114,6 +122,6 @@ The [submission draft and recording plan](SUBMISSION.md) keep the presentation t
 
 Use persistent storage for `data/app.sqlite` and `data/merchant.sqlite`, keep private app/merchant secrets stable and serve HTTPS. PayPal callback: `/webhooks/paypal`; AgentMail callback: `/api/webhooks/agentmail`. Keep hosting available through the judging window.
 
-Public source: [Hyunkim95/mailbox](https://github.com/Hyunkim95/mailbox). Hosted demo URL, real sandbox acceptance evidence and final YouTube video are pending. No Devpost submission has been made. Agent names, natural-language dashboard customization and manual signups using one shared email address per niche remain follow-on features. Shared niche mail will not merge service wallets; the current fixture flow still provisions per-service inboxes.
+Public source: [Hyunkim95/mailbox](https://github.com/Hyunkim95/mailbox). Hosted demo URL, real sandbox acceptance evidence and final YouTube video are pending. No Devpost submission has been made. The local prototype is agent-first: custom names and purposes, reusable addresses, scoped inboxes, dashboards and service wallets. One real agent address has been created through AgentMail. The user chooses a subscription’s parent agent; category templates do not impose ownership. A future Socials Manager can reuse the workspace with social-platform analytics and publishing connectors, which are not implemented.
 
 MIT licensed. The service SDK is an internal workspace package, not an adopted or published merchant network.

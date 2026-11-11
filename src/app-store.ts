@@ -8,6 +8,8 @@ import type {
   Proposal,
   PublicWallet,
   Wallet,
+  PersonalAgent,
+  PublicAgent,
 } from "./app-model.ts";
 import type { Service } from "@mailbox/service-sdk";
 import { MerchantError } from "@mailbox/service-sdk";
@@ -48,6 +50,7 @@ export class AppStore {
       CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS setup(id TEXT PRIMARY KEY, owner TEXT NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY,owner TEXT NOT NULL,template TEXT,body TEXT NOT NULL,UNIQUE(owner,template));
     `);
   }
   close() {
@@ -63,6 +66,88 @@ export class AppStore {
       this.db.exec("ROLLBACK");
       throw e;
     }
+  }
+  agents(owner: string): PersonalAgent[] {
+    return this.db
+      .prepare("SELECT body FROM agents WHERE owner=? ORDER BY rowid")
+      .all(owner)
+      .map((row) => JSON.parse(row.body as string) as PersonalAgent);
+  }
+  agent(owner: string, id: string): PersonalAgent {
+    const row = this.db
+      .prepare("SELECT body FROM agents WHERE owner=? AND id=?")
+      .get(owner, id);
+    if (!row)
+      throw new MerchantError("NOT_FOUND", "That agent is not available.");
+    return JSON.parse(row.body as string) as PersonalAgent;
+  }
+  publicAgent(agent: PersonalAgent): PublicAgent {
+    const { owner: _owner, inbox_id: _inbox, ...visible } = agent;
+    return visible;
+  }
+  createAgent(
+    owner: string,
+    input: {
+      name: string;
+      purpose: string;
+      tags?: string[];
+      template?: string;
+      id?: string;
+    },
+  ): PersonalAgent {
+    const agent: PersonalAgent = {
+      id: input.id ?? randomUUID(),
+      owner,
+      name: input.name,
+      purpose: input.purpose,
+      tags: input.tags ?? [],
+      email: null,
+      inbox_id: null,
+      template: input.template ?? null,
+      status: "draft",
+      created_at: this.now().toISOString(),
+    };
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO agents(id,owner,template,body) VALUES(?,?,?,?)",
+      )
+      .run(agent.id, owner, agent.template, JSON.stringify(agent));
+    return agent.template
+      ? this.agents(owner).find((a) => a.template === agent.template)!
+      : this.agent(owner, agent.id);
+  }
+  saveAgent(agent: PersonalAgent) {
+    this.db
+      .prepare("UPDATE agents SET body=? WHERE owner=? AND id=?")
+      .run(JSON.stringify(agent), agent.owner, agent.id);
+  }
+  attachWalletAgent(owner: string, walletId: string, agentId: string): Wallet {
+    const agent = this.agent(owner, agentId);
+    const wallet = this.wallet(owner, walletId);
+    if (wallet.agent_id === agentId) return wallet;
+    if (wallet.email && wallet.email !== agent.email)
+      throw new MerchantError(
+        "SERVICE_ADDRESS_EXISTS",
+        "This service already uses a different account address. Manage that connection before changing its agent.",
+      );
+    if (
+      wallet.agent_id &&
+      (wallet.vault_id ||
+        wallet.email ||
+        this.proposals(owner).some(
+          (p) =>
+            p.wallet_id === walletId &&
+            ["PAID", "PAYING", "RECONCILING"].includes(p.status),
+        ))
+    )
+      throw new MerchantError(
+        "SERVICE_ALREADY_ASSIGNED",
+        "This connected service already belongs to another agent. Open its existing workspace to manage the account.",
+      );
+    wallet.agent_id = agentId;
+    wallet.revision++;
+    this.saveWallet(wallet);
+    return wallet;
   }
   wallets(owner: string): Wallet[] {
     return this.db
@@ -321,6 +406,11 @@ export class AppStore {
         deny("APPROVAL_REQUIRED", "Approve this exact proposal before paying.");
       if (wallet.paused || wallet.status === "revoked")
         deny("WALLET_PAUSED", "This service wallet is paused.");
+      if (proposal.agent_id && wallet.agent_id !== proposal.agent_id)
+        deny(
+          "AGENT_CHANGED",
+          "The service's agent changed. Review a fresh proposal before paying.",
+        );
       if (new Date(wallet.expires_at) <= this.now())
         deny("PERMISSION_EXPIRED", "This service wallet permission expired.");
       if (wallet.mode === "draft")

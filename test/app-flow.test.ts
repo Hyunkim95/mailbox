@@ -231,6 +231,49 @@ test("consumer proposal uses real MCP, minimal PayPal response, independent merc
     await f.close();
   }
 });
+test("a subscription can belong to any user-chosen agent and keeps that agent's alias through payment", async () => {
+  const f = await fixture();
+  try {
+    const agent = f.store.createAgent("owner", {
+      name: "Tech Shopping",
+      purpose: "Manage my software and the subscriptions I choose.",
+      tags: ["work"],
+    });
+    agent.email = "coast@example.test";
+    agent.inbox_id = "fixture-inbox";
+    agent.status = "connected";
+    f.store.saveAgent(agent);
+    const proposal = await f.app.propose("owner", "coast-screen", "subscribe", {
+      agent_id: agent.id,
+    });
+    assert.equal(proposal.agent_id, agent.id);
+    assert.equal(
+      f.store.wallet("owner", proposal.wallet_id).agent_id,
+      agent.id,
+    );
+    await f.app.approve("owner", proposal.id);
+    const paid = f.store.proposal("owner", proposal.id);
+    assert.equal(paid.status, "PAID");
+    assert.equal(
+      f.merchant.status("coast-screen", paid.merchant_action_id!).address,
+      agent.email,
+    );
+    assert.equal(f.merchant.outbox()[0]!.to, agent.email);
+    const other = f.store.createAgent("someone-else", {
+      name: "Other",
+      purpose: "Other owner",
+    });
+    await assert.rejects(
+      f.app.propose("owner", "harbor-play", "subscribe", {
+        agent_id: other.id,
+      }),
+      /not available/,
+    );
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
 test("lost provider response retains reservation and retries the same payment identity", async () => {
   const f = await fixture({ loseFirstResponse: true });
   try {

@@ -1,8 +1,11 @@
 import { AgentMailClient } from "agentmail";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import fixtureEmails from "../fixtures/emails.json" with { type: "json" };
 import { MerchantError } from "@mailbox/service-sdk";
 import type { AppStore } from "./app-store.ts";
-import type { Wallet } from "./app-model.ts";
+import type { Wallet, PersonalAgent } from "./app-model.ts";
+import { defaultAgent } from "./agents.ts";
+import { catalogue } from "./catalogue.ts";
 import { configured, extractEmail } from "./ai.ts";
 import { readEmailContent } from "./email-content.ts";
 
@@ -16,22 +19,53 @@ function client() {
 }
 export async function provisionAddress(store: AppStore, wallet: Wallet) {
   if (wallet.inbox_id && wallet.email) return wallet;
-  const inbox = await client().inboxes.create({
-    username: `mb-${wallet.owner.slice(0, 8)}-${wallet.service_id}`,
-    displayName: `Maya · ${wallet.name}`,
-    clientId: `${wallet.owner}:${wallet.service_id}`,
-  });
+  const agent = wallet.agent_id
+    ? store.agent(wallet.owner, wallet.agent_id)
+    : defaultAgent(
+        store,
+        wallet.owner,
+        catalogue.services.find((service) => service.id === wallet.service_id)!,
+      );
+  const connected = await provisionAgentAddress(store, agent);
   wallet = store.wallet(wallet.owner, wallet.id);
-  wallet.inbox_id = inbox.inboxId;
-  wallet.email = inbox.email;
+  if (wallet.agent_id && wallet.agent_id !== connected.id)
+    throw new MerchantError(
+      "AGENT_CHANGED",
+      "The selected agent changed while its address was being prepared. Review a fresh proposal.",
+    );
+  wallet.agent_id = connected.id;
+  wallet.inbox_id = connected.inbox_id;
+  wallet.email = connected.email;
   store.saveWallet(wallet);
-  store.log(
-    wallet.owner,
-    "ADDRESS_CREATED",
-    "Dedicated service address created.",
-    wallet.service_id,
-  );
   return wallet;
+}
+export async function provisionAgentAddress(
+  store: AppStore,
+  agent: PersonalAgent,
+): Promise<PersonalAgent> {
+  if (agent.inbox_id && agent.email) return agent;
+  const slug =
+    agent.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 24) || "agent";
+  const inbox = await client().inboxes.create({
+    username: `${slug}-${agent.id.slice(0, 8)}`,
+    displayName: agent.name,
+    clientId: agent.id,
+  });
+  agent = store.agent(agent.owner, agent.id);
+  agent.inbox_id = inbox.inboxId;
+  agent.email = inbox.email;
+  agent.status = "connected";
+  store.saveAgent(agent);
+  store.log(
+    agent.owner,
+    "ADDRESS_CREATED",
+    "Agent address created for reuse across user-selected service signups.",
+  );
+  return agent;
 }
 export async function merchantSender(store: AppStore) {
   const existing = store.setting<string>("merchant_sender");
@@ -44,6 +78,61 @@ export async function merchantSender(store: AppStore) {
   return inbox.inboxId;
 }
 export async function syncInbox(store: AppStore, wallet: Wallet) {
+  return syncMailbox(store, {
+    owner: wallet.owner,
+    inbox_id: wallet.inbox_id,
+    ...(wallet.agent_id ? { agent_id: wallet.agent_id } : {}),
+    ...(!wallet.agent_id ? { legacy_service_id: wallet.service_id } : {}),
+  });
+}
+export async function syncAgentInbox(store: AppStore, agent: PersonalAgent) {
+  return syncMailbox(store, {
+    owner: agent.owner,
+    inbox_id: agent.inbox_id,
+    agent_id: agent.id,
+  });
+}
+export function incomingService(
+  text: string,
+  sender: string,
+  legacyServiceId?: string,
+) {
+  const fixtureId = /Mailbox fixture reference:\s*([a-z0-9-]+)/i.exec(
+    text,
+  )?.[1];
+  const fixture = fixtureEmails.find((f) => f.id === fixtureId);
+  if (fixture) return { service_id: fixture.service_id, fixture };
+  const marker =
+    /--- mailbox\.service-event\.v1 ---\s*([\s\S]*?)\s*--- end mailbox\.service-event\.v1 ---/.exec(
+      text,
+    );
+  if (marker)
+    try {
+      const event = JSON.parse(marker[1]!);
+      if (catalogue.services.some((service) => service.id === event.service_id))
+        return { service_id: event.service_id as string };
+    } catch {}
+  const normalized = sender.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const services = catalogue.services.filter((service) =>
+    normalized.includes(service.name.toLowerCase().replace(/[^a-z0-9]/g, "")),
+  );
+  return {
+    service_id:
+      services.length === 1
+        ? services[0]!.id
+        : (legacyServiceId ??
+          `email:${createHash("sha256").update(sender.toLowerCase()).digest("hex").slice(0, 16)}`),
+  };
+}
+async function syncMailbox(
+  store: AppStore,
+  wallet: {
+    owner: string;
+    inbox_id: string | null;
+    agent_id?: string;
+    legacy_service_id?: string;
+  },
+) {
   if (!wallet.inbox_id || !configured("AGENTMAIL_API_KEY")) return;
   const provider = client();
   const result = await provider.inboxes.messages.list(wallet.inbox_id, {
@@ -51,12 +140,18 @@ export async function syncInbox(store: AppStore, wallet: Wallet) {
   });
   const known = new Set(
     store
-      .messages(wallet.owner, wallet.service_id)
+      .messages(wallet.owner)
+      .filter((message) =>
+        wallet.agent_id
+          ? message.agent_id === wallet.agent_id
+          : message.service_id === wallet.legacy_service_id,
+      )
       .filter((m) => m.provider_id)
       .map((m) => m.provider_id),
   );
   for (const item of [...result.messages].reverse()) {
-    if (known.has(item.messageId)) continue;
+    const providerId = `${wallet.inbox_id}:${item.messageId}`;
+    if (known.has(providerId) || known.has(item.messageId)) continue;
     const message = await provider.inboxes.messages.get(
       wallet.inbox_id,
       item.messageId,
@@ -68,16 +163,34 @@ export async function syncInbox(store: AppStore, wallet: Wallet) {
     });
     const text = content.text;
     const facts = await extractEmail(message.subject ?? "", text);
+    const identified = incomingService(
+      text,
+      message.from,
+      wallet.legacy_service_id,
+    );
     store.saveMessage({
       id:
         store.setting<string>(`seed-provider:${message.messageId}`) ??
-        randomUUID(),
+        (identified.fixture
+          ? `fixture:${wallet.owner}:${identified.fixture.id}`
+          : randomUUID()),
       owner: wallet.owner,
-      service_id: wallet.service_id,
-      provider_id: message.messageId,
+      service_id: identified.service_id,
+      ...(wallet.agent_id ? { agent_id: wallet.agent_id } : {}),
+      provider_id: providerId,
       subject: message.subject ?? "Service message",
       from: message.from,
       text,
+      format: message.html ? "html" : "plain_text",
+      ...(identified.fixture ? { scenario: identified.fixture.scenario } : {}),
+      ...(store.setting<string>(`seed-scenario:${message.messageId}`)
+        ? {
+            scenario: store.setting<string>(
+              `seed-scenario:${message.messageId}`,
+            )!,
+          }
+        : {}),
+      ...(message.html ? { html: message.html } : {}),
       received_at: new Date(message.timestamp).toISOString(),
       kind: facts.kind,
       facts: {
@@ -103,14 +216,14 @@ export async function syncInbox(store: AppStore, wallet: Wallet) {
         wallet.owner,
         "EMAIL_QUARANTINED",
         "Email attempted an unsupported or permission-changing action. No spending authority granted.",
-        wallet.service_id,
+        identified.service_id,
       );
     else if (/upgrade|upsell|more screens/i.test(message.subject ?? ""))
       store.log(
         wallet.owner,
         "UPGRADE_DECLINED",
         "An unrequested upgrade cannot create spending authority. No payment or interruption was needed.",
-        wallet.service_id,
+        identified.service_id,
         facts.amount_minor,
       );
   }

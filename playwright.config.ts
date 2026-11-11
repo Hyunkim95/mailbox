@@ -43,6 +43,7 @@ export default defineConfig({
       OPENAI_API_KEY: "",
       ANTHROPIC_API_KEY: "",
       AI_PROVIDER: "openai",
+      CHANNEL3_API_KEY: "",
       RENDER_API_KEY: "",
     },
   },

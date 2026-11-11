@@ -4,7 +4,7 @@ Status: the local build and fixture checks pass. Complete the live acceptance ru
 
 ## Project description
 
-Mailbox gives each service an email address and a wallet with limits. It helps people find useful offers and manage purchases and subscriptions without giving an agent unrestricted spending authority.
+Mailbox gives each agent an email address and a workspace for the services its user chooses. Each connected service has its own wallet with limits. It helps people find useful offers and manage purchases and subscriptions without giving an agent unrestricted spending authority.
 
 Maya wants to watch The Lantern Coast. Mailbox compares three invented streaming services, prepares one paid month with renewal disabled, and asks her to review the exact price and wallet permission. The PayPal sandbox adapter handles saved payment consent and charging; the merchant independently verifies the capture before activating access. The dashboard keeps the service, payment, confirmation message and cancellation date together.
 
@@ -16,7 +16,7 @@ The model interprets requests and extracts typed email facts. It cannot grant pe
 
 The reference merchants use a thin TypeScript SDK over MCP and PayPal. Adding a service with an existing subscription, purchase or booking capability is a new configuration. The demo uses this SDK itself; no outside merchant adoption is claimed.
 
-Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI or Claude structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 44 core tests and seven browser scenarios pass using real MCP calls and injected provider responses. Real OpenAI request interpretation and email extraction passed a direct API check. Real Anthropic, payment/email-provider acceptance and hosted execution remain pending.
+Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI or Claude structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 50 core tests and ten browser scenarios pass using real MCP calls and injected provider responses. Real OpenAI request interpretation and email extraction passed a direct API check. Real Anthropic, payment/email-provider acceptance and hosted execution remain pending.
 
 ## Recording plan
 

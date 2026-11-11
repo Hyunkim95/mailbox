@@ -26,10 +26,13 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
+    "@channel3/sdk": "^4.9.0",
     "@mailbox/service-sdk": "*",
     "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
+    "ag-studio": "^3.1.0",
+    "ag-studio-react": "^3.1.0",
     "agentmail": "^0.5.53",
     "cheerio": "^1.2.0",
     "lucide-react": "^1.72.0",

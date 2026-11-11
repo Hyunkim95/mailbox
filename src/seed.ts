@@ -6,6 +6,8 @@ import type { Message } from "./app-model.ts";
 import { catalogue } from "./catalogue.ts";
 import { configured } from "./ai.ts";
 import { merchantSender, provisionAddress, syncInbox } from "./email.ts";
+import { nativePromotionFacts, readEmailContent } from "./email-content.ts";
+import { sampleAgents, defaultAgent } from "./agents.ts";
 
 export function fixtureMessages(owner: string, now = new Date()): Message[] {
   return fixtures.map((f) => {
@@ -13,6 +15,11 @@ export function fixtureMessages(owner: string, now = new Date()): Message[] {
       f.expires_days === null
         ? null
         : new Date(now.getTime() + f.expires_days * 86400_000).toISOString();
+    const html = "html" in f && typeof f.html === "string" ? f.html : undefined;
+    const content = readEmailContent({
+      text: f.text,
+      ...(html ? { html } : {}),
+    });
     return {
       id: `fixture:${owner}:${f.id}`,
       owner,
@@ -20,7 +27,15 @@ export function fixtureMessages(owner: string, now = new Date()): Message[] {
       provider_id: null,
       subject: f.subject,
       from: f.from,
-      text: `${f.text}${expires ? `\nOffer expiry: ${expires}` : ""}\n\nMailbox fixture reference: ${f.id}`,
+      text: `${content.text}${expires ? `\nOffer expiry: ${expires}` : ""}\n\nMailbox fixture reference: ${f.id}`,
+      scenario: f.scenario,
+      format: html ? "html" : "plain_text",
+      ...(html ? { html } : {}),
+      media: {
+        image_count: content.images.length,
+        needs_vision: content.needsVision,
+        unread_attachments: false,
+      },
       received_at: new Date(
         now.getTime() - f.days_ago * 86400_000,
       ).toISOString(),
@@ -31,6 +46,7 @@ export function fixtureMessages(owner: string, now = new Date()): Message[] {
         expires,
         action_id: null,
         suspicious: f.id === "pets-06",
+        ...nativePromotionFacts(f.subject, content.text),
       },
       origin: "fixture_preview",
     };
@@ -42,6 +58,13 @@ export async function seedMessages(
   send: boolean,
 ) {
   const messages = fixtureMessages(owner, store.now());
+  sampleAgents(store, owner);
+  for (const message of messages) {
+    const service = catalogue.services.find(
+      (service) => service.id === message.service_id,
+    )!;
+    message.agent_id = defaultAgent(store, owner, service).id;
+  }
   if (!send) {
     store.setSetting(`message-mode:${owner}`, "preview");
     for (const message of messages) store.saveMessage(message);
@@ -81,12 +104,15 @@ export async function seedMessages(
         to: [wallet.email!],
         subject: message.subject,
         text: message.text,
+        ...(message.html ? { html: message.html } : {}),
         headers: { "X-Mailbox-Fixture-Id": message.id.split(":").at(-1)! },
       },
       { idempotencyKey: `seed-${owner}-${message.id.split(":").at(-1)}` },
     );
     store.setSetting(key, response.messageId);
     store.setSetting(`seed-provider:${response.messageId}`, message.id);
+    if (message.scenario)
+      store.setSetting(`seed-scenario:${response.messageId}`, message.scenario);
     sent++;
   }
   for (const wallet of store.wallets(owner)) await syncInbox(store, wallet);

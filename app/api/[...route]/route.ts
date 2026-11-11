@@ -10,8 +10,14 @@ import {
   validAccessKey,
   cookieOptions,
 } from "../../../src/auth";
-import { syncInbox } from "../../../src/email";
+import {
+  syncInbox,
+  provisionAgentAddress,
+  syncAgentInbox,
+} from "../../../src/email";
 import { seedMessages } from "../../../src/seed";
+import { searchMarket } from "../../../src/market";
+import { studioTurn } from "../../../src/studio-model";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ route: string[] }> };
@@ -30,6 +36,12 @@ const ruleSchema = z.object({
 const commandSchema = z.object({
   action: z.enum([
     "ask",
+    "market_search",
+    "create_agent",
+    "connect_agent",
+    "update_agent",
+    "studio_turn",
+    "studio_save",
     "propose",
     "approve",
     "decline",
@@ -53,6 +65,25 @@ const commandSchema = z.object({
   paused: z.boolean().optional(),
   rules: ruleSchema.optional(),
   key: z.string().max(300).optional(),
+  agent_id: z.string().uuid().optional(),
+  request_id: z.string().uuid().optional(),
+  name: z.string().trim().min(1).max(60).optional(),
+  purpose: z.string().trim().min(1).max(1500).optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
+  niche: z
+    .enum(["all", "entertainment", "groceries", "dining", "pets"])
+    .optional(),
+  turn: z.unknown().optional(),
+  layout: z
+    .object({
+      pages: z
+        .array(z.object({ id: z.string().max(100) }).passthrough())
+        .min(1)
+        .max(8),
+      selectedPageId: z.string().max(100),
+    })
+    .passthrough()
+    .optional(),
 });
 function response(body: unknown, status = 200) {
   return NextResponse.json(body, {
@@ -118,6 +149,35 @@ export async function GET(request: NextRequest, context: Context) {
         ),
       });
     }
+    if (path === "studio") {
+      const account = await owner();
+      const agentId = request.nextUrl.searchParams.get("agent_id");
+      if (agentId) {
+        const agent = appService().store.agent(
+          account,
+          z.string().uuid().parse(agentId),
+        );
+        return response({
+          layout:
+            appService().store.setting(
+              `dashboard:${account}:agent:${agent.id}`,
+            ) ??
+            (agent.template
+              ? appService().store.setting(
+                  `dashboard:${account}:${agent.template}`,
+                )
+              : null) ??
+            null,
+        });
+      }
+      const niche = z
+        .enum(["all", "entertainment", "groceries", "dining", "pets"])
+        .parse(request.nextUrl.searchParams.get("niche") ?? "all");
+      return response({
+        layout:
+          appService().store.setting(`dashboard:${account}:${niche}`) ?? null,
+      });
+    }
     if (path === "paypal/return") {
       const account = await owner(),
         state = request.nextUrl.searchParams.get("state");
@@ -128,9 +188,12 @@ export async function GET(request: NextRequest, context: Context) {
         );
       try {
         const p = await appService().finishSetup(account, state);
+        const actor =
+          p.agent_id ??
+          appService().store.wallet(account, p.wallet_id).agent_id;
         return NextResponse.redirect(
           new URL(
-            `/?result=${p.status === "PAID" ? "paid" : p.status === "WAITING" ? "armed" : "pending"}`,
+            `/?result=${p.status === "PAID" ? "paid" : p.status === "WAITING" ? "armed" : "pending"}${actor ? `&agent=${encodeURIComponent(actor)}` : ""}`,
             request.url,
           ),
         );
@@ -161,7 +224,7 @@ export async function POST(request: NextRequest, context: Context) {
     const path = (await context.params).route.join("/"),
       service = appService();
     const raw = await request.text();
-    if (raw.length > 65_536)
+    if (raw.length > 262_144)
       return response({ error: "REQUEST_TOO_LARGE" }, 413);
     if (path === "webhooks/agentmail") {
       const signing =
@@ -184,12 +247,27 @@ export async function POST(request: NextRequest, context: Context) {
       };
       const inbox = payload.message?.inbox_id ?? payload.message?.inboxId;
       if (inbox) {
+        let matched = false;
         for (const row of service.store.db
-          .prepare("SELECT body FROM wallets")
+          .prepare("SELECT owner,id FROM agents")
           .all()) {
-          const wallet = JSON.parse(row.body as string);
-          if (wallet.inbox_id === inbox) await syncInbox(service.store, wallet);
+          const agent = service.store.agent(
+            row.owner as string,
+            row.id as string,
+          );
+          if (agent.inbox_id === inbox) {
+            await syncAgentInbox(service.store, agent);
+            matched = true;
+          }
         }
+        if (!matched)
+          for (const row of service.store.db
+            .prepare("SELECT body FROM wallets")
+            .all()) {
+            const wallet = JSON.parse(row.body as string);
+            if (wallet.inbox_id === inbox)
+              await syncInbox(service.store, wallet);
+          }
       }
       return response({ accepted: true });
     }
@@ -217,8 +295,11 @@ export async function POST(request: NextRequest, context: Context) {
           },
           401,
         );
+      const session = createSession();
+      const demoOwner = ownerFromSession(session)!;
+      await seedMessages(service.store, demoOwner, false);
       const result = response({ signedIn: true });
-      result.cookies.set("mailbox_session", createSession(), {
+      result.cookies.set("mailbox_session", session, {
         ...cookieOptions,
         secure: request.nextUrl.protocol === "https:",
       });
@@ -230,6 +311,75 @@ export async function POST(request: NextRequest, context: Context) {
       return result;
     }
     const account = await owner();
+    if (input.action === "create_agent") {
+      if (!input.name || !input.purpose)
+        return response(
+          {
+            error: "AGENT_DETAILS_REQUIRED",
+            message: "Give your agent a name and a purpose.",
+          },
+          400,
+        );
+      const agent = service.store.createAgent(account, {
+        name: input.name,
+        purpose: input.purpose,
+        ...(input.tags ? { tags: input.tags } : {}),
+        ...(input.request_id ? { id: input.request_id } : {}),
+      });
+      return response({ agent: service.store.publicAgent(agent) });
+    }
+    if (input.action === "connect_agent") {
+      const agent = service.store.agent(
+        account,
+        input.agent_id ?? input.id ?? "",
+      );
+      return response({
+        agent: service.store.publicAgent(
+          await provisionAgentAddress(service.store, agent),
+        ),
+      });
+    }
+    if (input.action === "update_agent") {
+      const agent = service.store.agent(
+        account,
+        input.agent_id ?? input.id ?? "",
+      );
+      if (input.name) agent.name = input.name;
+      if (input.purpose) agent.purpose = input.purpose;
+      if (input.tags) agent.tags = input.tags;
+      service.store.saveAgent(agent);
+      return response({ agent: service.store.publicAgent(agent) });
+    }
+    if (input.action === "studio_turn")
+      return response(await studioTurn(input.turn));
+    if (input.action === "studio_save") {
+      if (!input.layout || (!input.niche && !input.agent_id))
+        return response(
+          {
+            error: "INVALID_LAYOUT",
+            message: "Choose a niche and a dashboard layout.",
+          },
+          400,
+        );
+      if (input.agent_id) service.store.agent(account, input.agent_id);
+      service.store.setSetting(
+        input.agent_id
+          ? `dashboard:${account}:agent:${input.agent_id}`
+          : `dashboard:${account}:${input.niche}`,
+        input.layout,
+      );
+      return response({ saved: true });
+    }
+    if (input.action === "market_search") {
+      if (input.agent_id) service.store.agent(account, input.agent_id);
+      const result = await searchMarket(input.text ?? "");
+      service.store.log(
+        account,
+        "MARKET_SEARCH",
+        "Product discovery through Channel3. No spending authority created.",
+      );
+      return response(result);
+    }
     if (input.action === "seed_preview" || input.action === "seed_live")
       return response(
         await seedMessages(
@@ -257,7 +407,12 @@ export async function POST(request: NextRequest, context: Context) {
     };
     if (input.action === "ask")
       return response(
-        await service.ask(account, input.text ?? "", input.example),
+        await service.ask(
+          account,
+          input.text ?? "",
+          input.example,
+          input.agent_id,
+        ),
       );
     if (input.action === "propose") {
       if (!input.service_id)
@@ -268,6 +423,7 @@ export async function POST(request: NextRequest, context: Context) {
           account,
           input.service_id,
           input.kind ?? "buy",
+          input.agent_id ? { agent_id: input.agent_id } : {},
         ),
       });
     }

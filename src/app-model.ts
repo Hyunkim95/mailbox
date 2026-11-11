@@ -1,8 +1,22 @@
 export type PermissionMode = "draft" | "ask" | "auto";
+export type PersonalAgent = {
+  id: string;
+  owner: string;
+  name: string;
+  purpose: string;
+  tags: string[];
+  email: string | null;
+  inbox_id: string | null;
+  template: string | null;
+  status: "draft" | "connected" | "paused";
+  created_at: string;
+};
+export type PublicAgent = Omit<PersonalAgent, "owner" | "inbox_id">;
 export type Wallet = {
   id: string;
   owner: string;
   service_id: string;
+  agent_id?: string;
   name: string;
   category: string;
   cap: number;
@@ -29,6 +43,7 @@ export type Wallet = {
 export type Proposal = {
   id: string;
   owner: string;
+  agent_id?: string;
   service_id: string;
   wallet_id: string;
   kind: "subscribe" | "buy" | "book" | "condition";
@@ -88,6 +103,7 @@ export type Proposal = {
 export type Message = {
   id: string;
   owner: string;
+  agent_id?: string;
   service_id: string;
   provider_id: string | null;
   subject: string;
@@ -95,7 +111,16 @@ export type Message = {
   text: string;
   received_at: string;
   kind:
-    "offer" | "receipt" | "renewal" | "confirmation" | "verification" | "other";
+    | "offer"
+    | "receipt"
+    | "invoice"
+    | "renewal"
+    | "confirmation"
+    | "verification"
+    | "other";
+  scenario?: string;
+  format?: "plain_text" | "html";
+  html?: string;
   facts: {
     item: string | null;
     amount_minor: number | null;
@@ -131,6 +156,7 @@ export type PublicWallet = Omit<Wallet, "owner" | "vault_id" | "inbox_id"> & {
   available: number;
 };
 export type AppState = {
+  agents: PublicAgent[];
   wallets: PublicWallet[];
   proposals: Proposal[];
   messages: Message[];

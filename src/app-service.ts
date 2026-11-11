@@ -16,20 +16,52 @@ import {
 import type { AppState, Proposal, Wallet } from "./app-model.ts";
 import { merchantTool } from "./service-connector.ts";
 import { PayPal } from "./paypal.ts";
-import { deliverOutbox, provisionAddress, syncInbox } from "./email.ts";
+import {
+  deliverOutbox,
+  provisionAddress,
+  syncInbox,
+  syncAgentInbox,
+} from "./email.ts";
 import { catalogue } from "./catalogue.ts";
 import { findCoffeeDeal } from "./coffee-deals.ts";
 import { encryptToken, decryptToken } from "./token-vault.ts";
+import { sampleAgents, defaultAgent } from "./agents.ts";
+import { searchMarket } from "./market.ts";
 
 export class AppService {
   constructor(
     readonly store: AppStore,
     readonly paypal = new PayPal(),
-    readonly mail = { provisionAddress, deliverOutbox, syncInbox },
+    readonly mail: {
+      provisionAddress: typeof provisionAddress;
+      deliverOutbox: typeof deliverOutbox;
+      syncInbox: typeof syncInbox;
+      syncAgentInbox?: typeof syncAgentInbox;
+    } = { provisionAddress, deliverOutbox, syncInbox, syncAgentInbox },
     readonly interpret = interpretAsk,
   ) {}
   state(owner: string): AppState {
+    if (
+      !this.store.agents(owner).length &&
+      this.store
+        .messages(owner)
+        .some((message) => message.origin === "fixture_preview")
+    ) {
+      sampleAgents(this.store, owner);
+      for (const message of this.store.messages(owner)) {
+        const service = catalogue.services.find(
+          (service) => service.id === message.service_id,
+        );
+        if (service && !message.agent_id) {
+          message.agent_id = defaultAgent(this.store, owner, service).id;
+          this.store.saveMessage(message);
+        }
+      }
+    }
     return {
+      agents: this.store
+        .agents(owner)
+        .map((agent) => this.store.publicAgent(agent)),
       wallets: this.store
         .wallets(owner)
         .map((w) => this.store.publicWallet(owner, w)),
@@ -61,7 +93,8 @@ export class AppService {
       );
     return service;
   }
-  async ask(owner: string, text: string, example?: string) {
+  async ask(owner: string, text: string, example?: string, agentId?: string) {
+    const actingAgent = agentId ? this.store.agent(owner, agentId) : undefined;
     if (text.length < 1 || text.length > 1500)
       throw new MerchantError(
         "INVALID_ASK",
@@ -103,12 +136,18 @@ export class AppService {
       };
     } else
       intent = await this.interpret(text, {
+        agent: actingAgent ? this.store.publicAgent(actingAgent) : null,
         date: this.store.now().toISOString(),
         timezone: "Asia/Dubai",
         services,
-        wallets: this.state(owner).wallets,
+        wallets: this.state(owner).wallets.filter(
+          (wallet) => !actingAgent || wallet.agent_id === actingAgent.id,
+        ),
         messages: this.store
           .messages(owner)
+          .filter(
+            (message) => !actingAgent || message.agent_id === actingAgent.id,
+          )
           .slice(0, 30)
           .map((m) => ({
             id: m.id,
@@ -125,6 +164,11 @@ export class AppService {
         ? "Explicit fixture walkthrough; no model call."
         : "Request interpreted with structured model output.",
     );
+    if (intent.intent === "market_search")
+      return {
+        ...(await searchMarket(intent.query || text)),
+        ...(actingAgent ? { agent_id: actingAgent.id } : {}),
+      };
     if (intent.intent === "film") {
       const title = intent.film_title?.trim();
       if (!title)
@@ -198,7 +242,11 @@ export class AppService {
     if (intent.intent === "coffee") {
       const deal = await findCoffeeDeal({
         services,
-        messages: this.store.messages(owner),
+        messages: this.store
+          .messages(owner)
+          .filter(
+            (message) => !actingAgent || message.agent_id === actingAgent.id,
+          ),
         now: this.store.now(),
         quantity: intent.quantity ?? 1,
         maxAmount: intent.under_minor,
@@ -217,6 +265,7 @@ export class AppService {
       return {
         type: "proposal",
         proposal: await this.propose(owner, deal.serviceId, "buy", {
+          ...(agentId ? { agent_id: agentId } : {}),
           quantity: intent.quantity ?? 1,
           item_id: deal.itemId,
           quote: deal.quote,
@@ -239,6 +288,7 @@ export class AppService {
       return {
         type: "proposal",
         proposal: await this.propose(owner, "marina-table", "book", {
+          ...(agentId ? { agent_id: agentId } : {}),
           booking: {
             date: intent.date,
             time: intent.time,
@@ -252,6 +302,7 @@ export class AppService {
       return {
         type: "proposal",
         proposal: await this.propose(owner, "daily-paws", "condition", {
+          ...(agentId ? { agent_id: agentId } : {}),
           quantity: intent.quantity ?? 1,
           under: intent.under_minor ?? 3000,
         }),
@@ -301,6 +352,7 @@ export class AppService {
       comparison?: Proposal["comparison"];
       sources?: string[];
       rationale?: string;
+      agent_id?: string;
     } = {},
   ): Promise<Proposal> {
     const service = this.service(serviceId);
@@ -320,7 +372,10 @@ export class AppService {
           : service.kind === "booking"
             ? "book"
             : "buy";
-    const wallet = this.store.ensureWallet(owner, service);
+    if (options.agent_id) this.store.agent(owner, options.agent_id);
+    let wallet = this.store.ensureWallet(owner, service);
+    if (options.agent_id)
+      wallet = this.store.attachWalletAgent(owner, wallet.id, options.agent_id);
     const quote =
       options.quote ??
       (await merchantTool<Quote>(serviceId, "get_quote", {
@@ -332,6 +387,7 @@ export class AppService {
     const proposal: Proposal = {
       id: randomUUID(),
       owner,
+      ...(wallet.agent_id ? { agent_id: wallet.agent_id } : {}),
       service_id: serviceId,
       wallet_id: wallet.id,
       kind,
@@ -372,6 +428,10 @@ export class AppService {
       cancel_effective_at: null,
       sources: this.store
         .messages(owner, serviceId)
+        .filter(
+          (message) =>
+            !options.agent_id || message.agent_id === options.agent_id,
+        )
         .filter(
           (m) =>
             !m.facts.suspicious &&
@@ -1175,7 +1235,23 @@ export class AppService {
   }
   async sync(owner: string) {
     await this.evaluateConditions(owner);
+    const seenInboxes = new Set<string>();
+    for (const agent of this.store.agents(owner)) {
+      if (!agent.inbox_id || !this.mail.syncAgentInbox) continue;
+      seenInboxes.add(agent.inbox_id);
+      try {
+        await this.mail.syncAgentInbox(this.store, agent);
+      } catch {
+        this.store.log(
+          owner,
+          "INBOX_SYNC_PENDING",
+          "Waiting for agent email; retry is available.",
+        );
+      }
+    }
     for (const wallet of this.store.wallets(owner)) {
+      if (wallet.inbox_id && seenInboxes.has(wallet.inbox_id)) continue;
+      if (wallet.inbox_id) seenInboxes.add(wallet.inbox_id);
       try {
         await this.mail.syncInbox(this.store, wallet);
       } catch {

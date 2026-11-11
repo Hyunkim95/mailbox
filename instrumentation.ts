@@ -18,7 +18,7 @@ export async function register() {
       merchantRuntime().settleDue();
       const service = appService();
       for (const row of service.store.db
-        .prepare("SELECT DISTINCT owner FROM wallets")
+        .prepare("SELECT owner FROM wallets UNION SELECT owner FROM agents")
         .all()) {
         try {
           await service.sync(row.owner as string);
