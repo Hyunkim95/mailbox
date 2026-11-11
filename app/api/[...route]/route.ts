@@ -153,6 +153,15 @@ export async function GET(request: NextRequest, context: Context) {
     }
     if (path === "studio") {
       const account = await owner();
+      if (process.env.MAILBOX_ENABLE_AG_STUDIO === "false")
+        return response(
+          {
+            error: "DASHBOARD_UNAVAILABLE",
+            message:
+              "Dashboard customization is not available in this hosted demo.",
+          },
+          503,
+        );
       const agentId = request.nextUrl.searchParams.get("agent_id");
       if (agentId) {
         const agent = appService().store.agent(
@@ -317,6 +326,18 @@ export async function POST(request: NextRequest, context: Context) {
       return result;
     }
     const account = await owner();
+    if (
+      process.env.MAILBOX_ENABLE_AG_STUDIO === "false" &&
+      ["studio_turn", "studio_save"].includes(input.action)
+    )
+      return response(
+        {
+          error: "DASHBOARD_UNAVAILABLE",
+          message:
+            "Dashboard customization is not available in this hosted demo.",
+        },
+        503,
+      );
     if (input.action === "create_agent") {
       if (!input.name || !input.purpose)
         return response(

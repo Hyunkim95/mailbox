@@ -48,8 +48,9 @@ services:
         sync: false
       - key: CHANNEL3_API_KEY
         sync: false
-      - key: NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY
-        sync: false
+      - key: MAILBOX_ENABLE_AG_STUDIO
+        value: "false"
+      # Enable AG Studio only after adding NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY and rebuilding.
       - key: AI_PROVIDER
         sync: false
       # Add only the selected provider API key in the service Environment settings.

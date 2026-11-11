@@ -24,7 +24,12 @@
       }
     ],
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@mailbox/dashboard": [
+        "./app/niche-dashboard.tsx"
+      ]
+    }
   },
   "include": [
     "app/**/*.ts",
@@ -34,7 +39,9 @@
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     ".next-qa/types/**/*.ts",
-    ".next-qa/dev/types/**/*.ts"
+    ".next-qa/dev/types/**/*.ts",
+    ".next-core/types/**/*.ts",
+    ".next-core/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

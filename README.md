@@ -115,7 +115,7 @@ Current checks: 53 core tests and fourteen browser scenarios pass. A real PayPal
 
 Each agent has expandable sidebar sections for Overview, Inbox, Dashboard, Services and Activity. Global navigation stays fixed when switching agents. The selected agent and section survive reloads through the URL. Open an agent, then **Dashboard**. AG Studio renders its wallet, proposal and email data. Its Agent Framework uses a single bounded dashboard agent through a server-side model proxy; model keys never reach the browser. Natural-language edits are previewed, saved per owner and agent, and can be reset. A real OpenAI-driven chart creation and save passed a live local check.
 
-AG Studio is a commercial dependency. Local evaluation works without a key, with its watermark; a [trial or production license](https://www.ag-grid.com/studio/react/enterprise-licence/) is required for hosted use. Put the license, including AI access, in `NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY` before building. The MIT license covers this project's own code, not third-party commercial dependencies.
+AG Studio is a commercial dependency. Local evaluation works without a key, with its watermark; a [trial or production license](https://www.ag-grid.com/studio/react/enterprise-licence/) is required for hosted use. The approved hosted core build sets `MAILBOX_ENABLE_AG_STUDIO=false`: its build excludes the AG Studio runtime, its Dashboard view shows that the feature is unavailable, and dashboard API calls return 503. Local builds keep the full integration. To enable it on the host, add `NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY`, set `MAILBOX_ENABLE_AG_STUDIO=true` and rebuild. The MIT license covers this project's own code, not third-party commercial dependencies.
 
 ## Hosting and submission
 

@@ -3,7 +3,7 @@ import dynamic from "next/dynamic";
 import { MarketResults } from "./market-results";
 import { AgentHome, AgentIdentity, AgentForm } from "./agent-home";
 import type { MarketResult } from "../src/market";
-const NicheDashboard = dynamic(() => import("./niche-dashboard"), {
+const NicheDashboard = dynamic(() => import("@mailbox/dashboard"), {
   ssr: false,
   loading: () => <p>Opening your dashboard…</p>,
 });
