@@ -1,0 +1,129 @@
+{
+  "merchant": "Mailbox Fixture Merchant",
+  "currency": "USD",
+  "services": [
+    {
+      "id": "harbor-play",
+      "name": "Harbor Play",
+      "category": "entertainment",
+      "kind": "subscription",
+      "description": "Fictional films including The Lantern Coast",
+      "items": [
+        {
+          "id": "monthly",
+          "name": "One month of Harbor Play",
+          "amount_minor": 999,
+          "period": "month",
+          "includes": ["The Lantern Coast"],
+          "terms": "One paid month. Renewal disabled. Access ends at the merchant billing-period end."
+        }
+      ]
+    },
+    {
+      "id": "lantern-cinema",
+      "name": "Lantern Cinema",
+      "category": "entertainment",
+      "kind": "purchase",
+      "description": "Fictional film rentals including The Lantern Coast",
+      "items": [
+        {
+          "id": "lantern-rental",
+          "name": "The Lantern Coast rental",
+          "amount_minor": 499,
+          "period": "once",
+          "includes": ["The Lantern Coast"],
+          "terms": "48-hour rental after purchase. No recurring charge.",
+          "access_hours": 48
+        }
+      ]
+    },
+    {
+      "id": "coast-screen",
+      "name": "Coast Screen",
+      "category": "entertainment",
+      "kind": "subscription",
+      "description": "Fictional film catalogue including The Lantern Coast",
+      "items": [
+        {
+          "id": "monthly",
+          "name": "One month of Coast Screen",
+          "amount_minor": 799,
+          "period": "month",
+          "includes": ["The Lantern Coast"],
+          "terms": "One paid month. Renewal disabled. Access ends at the merchant billing-period end."
+        }
+      ]
+    },
+    {
+      "id": "basil-market",
+      "name": "Basil & Barley Market",
+      "category": "groceries",
+      "kind": "purchase",
+      "description": "Coffee offers and household grocery staples",
+      "items": [
+        {
+          "id": "coffee-250g",
+          "name": "House coffee, 250 g",
+          "amount_minor": 650,
+          "period": "once",
+          "includes": [],
+          "terms": "USD 6.50 per 250 g bag, tax and demo delivery included.",
+          "unit_quantity": 250,
+          "unit": "g",
+          "comparison_group": "house-coffee"
+        },
+        {
+          "id": "coffee-500g",
+          "name": "House coffee, 500 g",
+          "amount_minor": 1475,
+          "period": "once",
+          "includes": [],
+          "terms": "USD 14.75 per 500 g bag, tax and demo delivery included.",
+          "unit_quantity": 500,
+          "unit": "g",
+          "comparison_group": "house-coffee"
+        }
+      ]
+    },
+    {
+      "id": "marina-table",
+      "name": "Marina Table",
+      "category": "dining",
+      "kind": "booking",
+      "description": "Fictional restaurant near the marina with Friday evening tables",
+      "items": [
+        {
+          "id": "friday-deposit",
+          "name": "Friday table reservation deposit",
+          "amount_minor": 1000,
+          "period": "once",
+          "includes": [],
+          "terms": "USD 10 deposit per booking, credited against the bill. Refundable until 24 hours before arrival; later cancellation forfeits the deposit."
+        }
+      ],
+      "booking": {
+        "weekday": 5,
+        "times": ["19:00", "20:00"],
+        "capacity": 8,
+        "timezone": "Asia/Dubai"
+      }
+    },
+    {
+      "id": "daily-paws",
+      "name": "Daily Paws",
+      "category": "pets",
+      "kind": "purchase",
+      "description": "Dog-food restocking offers",
+      "items": [
+        {
+          "id": "dog-food-3kg",
+          "name": "Adult dog food, 3 kg",
+          "amount_minor": 2999,
+          "period": "once",
+          "includes": [],
+          "terms": "USD 29.99 for the exact 3 kg adult-food variant, tax and demo delivery included."
+        }
+      ]
+    }
+  ]
+}

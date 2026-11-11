@@ -1,0 +1,47 @@
+# Prepared deployment configuration. Creating this Blueprint provisions paid resources.
+services:
+  - type: web
+    name: mailbox-hackathon
+    runtime: node
+    plan: 0.5c-512mb
+    region: frankfurt
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start -- --hostname 0.0.0.0
+    healthCheckPath: /
+    disk:
+      name: mailbox-data
+      mountPath: /var/data/mailbox
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: APP_DATABASE_PATH
+        value: /var/data/mailbox/app.sqlite
+      - key: MOCK_DATABASE_PATH
+        value: /var/data/mailbox/merchant.sqlite
+      - key: MOCK_CUSTOMER_ID
+        value: maya
+      - key: APP_URL
+        sync: false
+      - key: APP_SESSION_SECRET
+        generateValue: true
+      - key: DEMO_ACCESS_KEY
+        generateValue: true
+      - key: MOCK_MERCHANT_TOKEN
+        generateValue: true
+      - key: MOCK_ADMIN_TOKEN
+        generateValue: true
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_MERCHANT_ID
+        sync: false
+      - key: AGENTMAIL_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

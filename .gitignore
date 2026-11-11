@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+data/
+*.sqlite*
+coverage/
+.next/
+.next-qa/
+test-results/
+playwright-report/
+next-env.d.ts
+*.tsbuildinfo
+BUILD_STATUS.md

@@ -1,0 +1,53 @@
+{
+  "name": "mailbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mailbox service dashboard, bounded PayPal wallets, and reusable MCP merchant fixtures",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build:core && next build",
+    "check": "npm run build -w @mailbox/service-sdk && tsc -p tsconfig.server.json --noEmit",
+    "start": "MAILBOX_RUN_WORKER=1 next start",
+    "test": "npm run build:core && node --test dist/test/*.test.js",
+    "demo": "npm run build:core && node --env-file=.env dist/scripts/demo.js",
+    "dev": "next dev --hostname 127.0.0.1",
+    "build:web": "npm run build -w @mailbox/service-sdk && next build",
+    "start:web": "next start",
+    "build:core": "npm run build -w @mailbox/service-sdk && tsc -p tsconfig.server.json",
+    "start:merchant": "node --env-file=.env dist/src/main.js",
+    "format:check": "prettier --check app src packages/service-sdk/src test scripts/*.ts instrumentation.ts next.config.ts",
+    "test:browser": "MAILBOX_BUILD_DIR=.next-qa MAILBOX_RUN_WORKER=0 npm run build && playwright test",
+    "predev": "npm run build:core",
+    "setup:local": "node scripts/setup-local.mjs"
+  },
+  "dependencies": {
+    "@mailbox/service-sdk": "*",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "agentmail": "^0.5.53",
+    "cheerio": "^1.2.0",
+    "lucide-react": "^1.72.0",
+    "next": "^16.4.6",
+    "openai": "^7.55.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "svix": "^2.10.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}
