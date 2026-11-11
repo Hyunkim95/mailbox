@@ -5,6 +5,7 @@ import { AppStore } from "../src/app-store.ts";
 import { AppService } from "../src/app-service.ts";
 import { PayPal } from "../src/paypal.ts";
 import { catalogue } from "../src/catalogue.ts";
+import type { AskIntent, interpretAsk } from "../src/ai.ts";
 import {
   Merchant,
   createMerchantHttp,
@@ -12,7 +13,12 @@ import {
   type VerifiedCapture,
 } from "@mailbox/service-sdk";
 
-async function fixture(options: { loseFirstResponse?: boolean } = {}) {
+async function fixture(
+  options: {
+    loseFirstResponse?: boolean;
+    interpret?: typeof interpretAsk;
+  } = {},
+) {
   let instant = "2026-11-11T12:00:00Z";
   const now = () => new Date(instant);
   const merchant = new Merchant(":memory:", catalogue.services, "maya", now);
@@ -110,11 +116,16 @@ async function fixture(options: { loseFirstResponse?: boolean } = {}) {
     now,
     "integration-vault-key-at-least-32-characters",
   );
-  const app = new AppService(store, new PayPal(request), {
-    provisionAddress: async (_store, wallet) => wallet,
-    deliverOutbox: async () => {},
-    syncInbox: async () => {},
-  });
+  const app = new AppService(
+    store,
+    new PayPal(request),
+    {
+      provisionAddress: async (_store, wallet) => wallet,
+      deliverOutbox: async () => {},
+      syncInbox: async () => {},
+    },
+    options.interpret,
+  );
   const wallet = store.ensureWallet(
     "owner",
     catalogue.services.find((s) => s.id === "coast-screen")!,
@@ -147,6 +158,43 @@ async function fixture(options: { loseFirstResponse?: boolean } = {}) {
   };
 }
 
+test("model-backed film lookup uses the grounded title even when its general query is the whole request", async () => {
+  const intent: AskIntent = {
+    intent: "film",
+    query: "I want to watch The Lantern Coast",
+    film_title: "The Lantern Coast",
+    service_id: null,
+    answer: null,
+    date: null,
+    time: null,
+    party_size: null,
+    quantity: 1,
+    under_minor: null,
+  };
+  const f = await fixture({ interpret: async () => intent });
+  try {
+    const found = await f.app.ask("owner", "I want to watch The Lantern Coast");
+    assert.equal(found.type, "options");
+    assert("options" in found);
+    assert.deepEqual(
+      found.options.map((option) => option.id),
+      ["harbor-play", "lantern-cinema", "coast-screen"],
+    );
+    assert.equal(f.charges(), 0);
+    intent.film_title = "A Film Not In This Catalogue";
+    const absent = await f.app.ask("owner", "I want a different film");
+    assert.equal(absent.type, "answer");
+    assert(
+      "answer" in absent && /No supported fixture service/.test(absent.answer),
+    );
+    intent.film_title = null;
+    const missing = await f.app.ask("owner", "I want to watch a film");
+    assert("answer" in missing && /Which film/.test(missing.answer));
+    assert.equal(f.store.proposals("owner").length, 0);
+  } finally {
+    await f.close();
+  }
+});
 test("consumer proposal uses real MCP, minimal PayPal response, independent merchant verification and one ledger debit", async () => {
   const f = await fixture();
   try {

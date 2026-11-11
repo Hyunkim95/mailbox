@@ -13,6 +13,7 @@ import { AppService } from "../src/app-service.ts";
 const intent = {
   intent: "coffee",
   query: "coffee",
+  film_title: null,
   service_id: null,
   answer: null,
   date: null,

@@ -26,6 +26,7 @@ export class AppService {
     readonly store: AppStore,
     readonly paypal = new PayPal(),
     readonly mail = { provisionAddress, deliverOutbox, syncInbox },
+    readonly interpret = interpretAsk,
   ) {}
   state(owner: string): AppState {
     return {
@@ -91,6 +92,7 @@ export class AppService {
       intent = {
         intent: kind,
         query: kind === "film" ? "The Lantern Coast" : text,
+        film_title: kind === "film" ? "The Lantern Coast" : null,
         service_id: null,
         answer: null,
         date: kind === "booking" ? date : null,
@@ -100,7 +102,7 @@ export class AppService {
         under_minor: kind === "pets_condition" ? 3000 : null,
       };
     } else
-      intent = await interpretAsk(text, {
+      intent = await this.interpret(text, {
         date: this.store.now().toISOString(),
         timezone: "Asia/Dubai",
         services,
@@ -124,7 +126,29 @@ export class AppService {
         : "Request interpreted with structured model output.",
     );
     if (intent.intent === "film") {
-      const matches = await this.services(intent.query || "The Lantern Coast");
+      const title = intent.film_title?.trim();
+      if (!title)
+        return {
+          type: "answer",
+          answer: "Which film would you like to watch?",
+          sources: [],
+          engine,
+        };
+      const normalize = (value: string) =>
+        value
+          .normalize("NFKC")
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, " ")
+          .trim();
+      const requested = normalize(title);
+      const matches = services
+        .map((service) => ({
+          ...service,
+          items: service.items.filter((item) =>
+            item.includes.some((film) => normalize(film) === requested),
+          ),
+        }))
+        .filter((service) => service.items.length > 0);
       if (!matches.length)
         return {
           type: "answer",

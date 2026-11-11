@@ -18,6 +18,12 @@ export const intentSchema = z.object({
     "unsupported",
   ]),
   query: z.string(),
+  film_title: z
+    .string()
+    .nullable()
+    .describe(
+      "For a film request, the movie title alone, without request verbs or service names. Preserve the requested title even when it is absent from the catalogue. Null if no specific film was named or this is not a film request.",
+    ),
   service_id: z.string().nullable(),
   answer: z.string().nullable(),
   date: z.string().nullable(),
