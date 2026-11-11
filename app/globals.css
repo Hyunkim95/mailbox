@@ -2682,40 +2682,113 @@ h1 {
   font-size: 12px;
   font-weight: 600;
 }
-.sidebar-agents {
-  margin-top: 24px;
+.sidebar-navigation {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  margin-top: 35px;
+  margin-bottom: 18px;
 }
-.sidebar-agents > button {
+.sidebar-navigation > .sidebar-label {
+  display: block;
+  padding-top: 12px;
+}
+.sidebar-agents {
+  margin-top: 25px;
+}
+.sidebar-agents > .sidebar-label {
+  display: block;
+  padding-top: 0;
+}
+.sidebar-agent {
+  margin-top: 6px;
+}
+.sidebar-agent-heading {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  margin-top: 6px;
-  padding: 10px 12px;
-  background: none;
-  border: 0;
-  text-align: left;
-  color: #637b52;
   border-radius: 8px;
-  font-size: 12px;
 }
-.sidebar-agents > button.active {
+.sidebar-agent-heading.active {
   background: #e2e9d5;
   color: #315b35;
 }
-.sidebar-agents > button > span {
+.sidebar-agent-heading button {
+  background: none;
+  border: 0;
+  color: #637b52;
+}
+.sidebar-agent-open {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 0 9px 10px;
+  text-align: left;
+  font-size: 12px;
+}
+.sidebar-agent-open > span {
   width: 23px;
   height: 23px;
   display: grid;
   place-items: center;
+  flex-shrink: 0;
   border-radius: 7px;
   background: #dfe8cf;
   font-size: 11px;
   font-weight: 700;
 }
-.sidebar-agents small {
+.sidebar-agent-open strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+.sidebar-agent small {
   margin-left: auto;
   color: #80916f;
+  font-size: 10px;
+}
+.sidebar-agent-toggle {
+  display: grid;
+  place-items: center;
+  padding: 12px 7px;
+}
+.sidebar-agent-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.sidebar-agent nav {
+  margin: 5px 7px 12px 21px;
+  padding-left: 12px;
+  border-left: 1px solid #d4ddc9;
+  gap: 2px;
+}
+.sidebar-agent nav[hidden] {
+  display: none;
+}
+.sidebar-agent-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 8px;
+  background: none;
+  text-align: left;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #748267;
+}
+.sidebar-agent-section:hover {
+  background: #e5e9dd;
+}
+.sidebar-agent-section[aria-current="page"] {
+  background: #dfe7d6;
+  color: #29442d;
+  font-weight: 600;
+}
+@media (min-width: 721px) {
+  .agent-workspace-tabs {
+    display: none !important;
+  }
 }
 .agent-identity {
   display: flex;

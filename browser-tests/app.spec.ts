@@ -228,7 +228,7 @@ test("AG Studio layout saves for its niche and stays private to its workspace", 
   await login(page, "Pantry");
   await seed(page);
   await page
-    .getByRole("navigation", { name: "Agent sections" })
+    .getByRole("navigation", { name: "Pantry sections" })
     .getByRole("button", { name: "Dashboard", exact: true })
     .click();
   await expect(page.getByTestId("niche-studio")).toBeVisible();
@@ -310,5 +310,69 @@ test.describe("phone layout", () => {
       path: "test-results/screenshots/streaming-phone.png",
       fullPage: true,
     });
+  });
+});
+
+test("agent sections stay nested without replacing global navigation", async ({
+  page,
+}) => {
+  await login(page, "Reel");
+  const globalNavigation = page.getByRole("navigation", {
+    name: "Your space",
+    exact: true,
+  });
+  const reelSections = page.getByRole("navigation", {
+    name: "Reel sections",
+    exact: true,
+  });
+  await expect(
+    globalNavigation.getByRole("button", { name: /All messages/ }),
+  ).toBeVisible();
+  await expect(
+    reelSections.getByRole("button", { name: "Overview", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+  const before = await globalNavigation.boundingBox();
+  await page
+    .getByRole("button", { name: "Open Pantry workspace", exact: true })
+    .click();
+  const pantrySections = page.getByRole("navigation", {
+    name: "Pantry sections",
+    exact: true,
+  });
+  await expect(reelSections).toBeVisible();
+  await expect(pantrySections).toBeVisible();
+  await expect(globalNavigation).toHaveText(
+    /Your agentsAll messages.*Before Mailbox/,
+  );
+  expect(await globalNavigation.boundingBox()).toEqual(before);
+  await reelSections.getByRole("button", { name: /^Inbox/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "Reel", exact: true }),
+  ).toBeVisible();
+  await expect(
+    reelSections.getByRole("button", { name: /^Inbox/ }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(pantrySections).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Reel", exact: true }),
+  ).toBeVisible();
+  await expect(
+    reelSections.getByRole("button", { name: /^Inbox/ }),
+  ).toHaveAttribute("aria-current", "page");
+  await reelSections
+    .getByRole("button", { name: "Overview", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Watch a film", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Review proposal", exact: true })
+    .click();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "One month of Coast Screen" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "test-results/screenshots/nested-agent-navigation.png",
+    fullPage: true,
   });
 });

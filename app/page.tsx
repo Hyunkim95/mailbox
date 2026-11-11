@@ -80,6 +80,13 @@ const icons = {
   dining: Utensils,
   pets: PawPrint,
 };
+const agentSections = [
+  { id: "services", label: "Overview", icon: LayoutGrid },
+  { id: "messages", label: "Inbox", icon: Mail },
+  { id: "dashboards", label: "Dashboard", icon: BarChart3 },
+  { id: "connections", label: "Services", icon: Mail },
+  { id: "activity", label: "Activity", icon: WalletIcon },
+];
 const samples = [
   {
     id: "film",
@@ -120,6 +127,8 @@ export default function Mailbox() {
     [needsLogin, setNeedsLogin] = useState(false),
     [loginKey, setLoginKey] = useState("");
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [navigationReady, setNavigationReady] = useState(false);
   const [agentForm, setAgentForm] = useState<"create" | PublicAgent | null>(
     null,
   );
@@ -167,9 +176,10 @@ export default function Mailbox() {
           ),
         }
       : workspaceState;
-  function openAgent(id: string) {
+  function openAgent(id: string, section = "services") {
     setActiveAgentId(id);
-    setView("services");
+    setExpandedAgents((current) => new Set([...current, id]));
+    setView(section);
     setResult(null);
     setAsk("");
     setSelectedService(null);
@@ -203,8 +213,14 @@ export default function Mailbox() {
     void refresh();
     const query = new URLSearchParams(location.search);
     if (query.get("agent")) {
-      setActiveAgentId(query.get("agent"));
-      setView("services");
+      const id = query.get("agent")!;
+      setActiveAgentId(id);
+      setExpandedAgents(new Set([id]));
+      setView(
+        agentSections.some((section) => section.id === query.get("view"))
+          ? query.get("view")!
+          : "services",
+      );
     }
     if (query.get("error")) setError(query.get("error")!);
     if (query.get("result"))
@@ -217,12 +233,31 @@ export default function Mailbox() {
               ? "PayPal connection canceled. Nothing was charged."
               : "Payment confirmation is still in progress.",
       );
-    if (query.size) history.replaceState({}, "", location.pathname);
+    query.delete("error");
+    query.delete("result");
+    history.replaceState(
+      {},
+      "",
+      `${location.pathname}${query.size ? `?${query}` : ""}`,
+    );
+    setNavigationReady(true);
     const timer = setInterval(() => {
       void refresh();
     }, 3000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (!navigationReady) return;
+    const url = new URL(location.href);
+    if (activeAgentId) {
+      url.searchParams.set("agent", activeAgentId);
+      url.searchParams.set("view", view);
+    } else {
+      url.searchParams.delete("agent");
+      url.searchParams.delete("view");
+    }
+    history.replaceState({}, "", url);
+  }, [activeAgentId, view, navigationReady]);
   async function command(payload: Record<string, unknown>, label = "request") {
     const requestedActor = activeAgentId;
     if (
@@ -430,7 +465,7 @@ export default function Mailbox() {
         </main>
       </div>
     );
-  if (!state)
+  if (!state || !workspaceState)
     return (
       <div className="loading-page">
         <Mail size={24} />
@@ -446,60 +481,111 @@ export default function Mailbox() {
           </span>
           Mailbox<span className="brand-period">.</span>
         </a>
-        <span className="sidebar-label">Your space</span>
-        <nav>
-          {[
-            { id: "agents", label: "Your agents", icon: LayoutGrid },
-            ...(activeAgent
-              ? [
-                  { id: "services", label: "Overview", icon: LayoutGrid },
-                  { id: "messages", label: "Inbox", icon: Mail },
-                  { id: "dashboards", label: "Dashboard", icon: BarChart3 },
-                  { id: "connections", label: "Services", icon: Mail },
-                  { id: "activity", label: "Activity", icon: WalletIcon },
-                ]
-              : [{ id: "messages", label: "All messages", icon: Mail }]),
-            { id: "inbox", label: "Before Mailbox", icon: FileText },
-          ].map((item) => (
-            <button
-              key={item.id}
-              className={view === item.id ? "nav-item active" : "nav-item"}
-              onClick={() => {
-                setView(item.id);
-                if (item.id === "agents" || item.id === "inbox") {
+        <div className="sidebar-navigation">
+          <span className="sidebar-label">Your space</span>
+          <nav aria-label="Your space">
+            {[
+              { id: "agents", label: "Your agents", icon: LayoutGrid },
+              { id: "messages", label: "All messages", icon: Mail },
+              { id: "inbox", label: "Before Mailbox", icon: FileText },
+            ].map((item) => (
+              <button
+                key={item.id}
+                className={
+                  !activeAgentId && view === item.id
+                    ? "nav-item active"
+                    : "nav-item"
+                }
+                onClick={() => {
+                  setView(item.id);
                   setActiveAgentId(null);
                   setResult(null);
-                }
-                setSelectedService(null);
-              }}
-            >
-              <item.icon size={18} />
-              {item.label}
-              {item.id === "messages" && state.messages.length > 0 && (
-                <span className="nav-count">{state.messages.length}</span>
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-agents">
-          <span className="sidebar-label">Your agents</span>
-          {workspaceState?.agents?.map((agent) => (
-            <button
-              key={agent.id}
-              className={activeAgentId === agent.id ? "active" : ""}
-              onClick={() => openAgent(agent.id)}
-            >
-              <span>{agent.name[0]?.toUpperCase()}</span>
-              {agent.name}
-              <small>
-                {
-                  workspaceState.messages.filter(
-                    (message) => message.agent_id === agent.id,
-                  ).length
-                }
-              </small>
-            </button>
-          ))}
+                  setSelectedService(null);
+                }}
+              >
+                <item.icon size={18} />
+                {item.label}
+                {item.id === "messages" &&
+                  workspaceState.messages.length > 0 && (
+                    <span className="nav-count">
+                      {workspaceState.messages.length}
+                    </span>
+                  )}
+              </button>
+            ))}
+          </nav>
+          <div className="sidebar-agents">
+            <span className="sidebar-label">Your agents</span>
+            {workspaceState.agents.map((agent) => (
+              <section className="sidebar-agent" key={agent.id}>
+                <div
+                  className={`sidebar-agent-heading ${activeAgentId === agent.id ? "active" : ""}`}
+                >
+                  <button
+                    className="sidebar-agent-open"
+                    onClick={() => openAgent(agent.id)}
+                    aria-label={`Open ${agent.name} workspace`}
+                  >
+                    <span>{agent.name[0]?.toUpperCase()}</span>
+                    <strong>{agent.name}</strong>
+                    <small>
+                      {
+                        workspaceState.messages.filter(
+                          (message) => message.agent_id === agent.id,
+                        ).length
+                      }
+                    </small>
+                  </button>
+                  <button
+                    className="sidebar-agent-toggle"
+                    aria-label={`${expandedAgents.has(agent.id) ? "Collapse" : "Expand"} ${agent.name} sections`}
+                    aria-expanded={expandedAgents.has(agent.id)}
+                    aria-controls={`agent-sections-${agent.id}`}
+                    onClick={() =>
+                      setExpandedAgents((current) => {
+                        const next = new Set(current);
+                        if (next.has(agent.id)) next.delete(agent.id);
+                        else next.add(agent.id);
+                        return next;
+                      })
+                    }
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+                <nav
+                  id={`agent-sections-${agent.id}`}
+                  aria-label={`${agent.name} sections`}
+                  hidden={!expandedAgents.has(agent.id)}
+                >
+                  {agentSections.map((section) => (
+                    <button
+                      key={section.id}
+                      className="sidebar-agent-section"
+                      aria-current={
+                        activeAgentId === agent.id && view === section.id
+                          ? "page"
+                          : undefined
+                      }
+                      onClick={() => openAgent(agent.id, section.id)}
+                    >
+                      <section.icon size={14} />
+                      {section.label}
+                      {section.id === "messages" && (
+                        <small>
+                          {
+                            workspaceState.messages.filter(
+                              (message) => message.agent_id === agent.id,
+                            ).length
+                          }
+                        </small>
+                      )}
+                    </button>
+                  ))}
+                </nav>
+              </section>
+            ))}
+          </div>
         </div>
         <div className="sidebar-bottom">
           <div className="demo-label">
@@ -598,13 +684,7 @@ export default function Mailbox() {
                 onEdit={() => setAgentForm(activeAgent)}
               />
               <nav className="agent-workspace-tabs" aria-label="Agent sections">
-                {[
-                  { id: "services", label: "Overview" },
-                  { id: "messages", label: "Inbox" },
-                  { id: "dashboards", label: "Dashboard" },
-                  { id: "connections", label: "Services" },
-                  { id: "activity", label: "Activity" },
-                ].map((tab) => (
+                {agentSections.map((tab) => (
                   <button
                     key={tab.id}
                     aria-pressed={view === tab.id}
