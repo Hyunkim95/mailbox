@@ -1,6 +1,6 @@
 # Mailbox submission draft
 
-Status: the local build and fixture checks pass. Complete the live acceptance run in [DEPLOYMENT.md](DEPLOYMENT.md), add the actual repository/demo/video URLs and judges' access details, then revise the validation paragraph before submitting. No entry has been submitted.
+Status: the local build and fixture checks pass. Complete the live acceptance run in [DEPLOYMENT.md](DEPLOYMENT.md), add the actual demo/video URLs and judges' access details, then revise the validation paragraph before submitting. No entry has been submitted.
 
 ## Project description
 
@@ -37,7 +37,7 @@ Target 2:45. Record actual application operation after live acceptance. Keep cut
 
 ## Final entry fields
 
-- Public MIT repository URL: pending publication.
+- Public MIT repository URL: https://github.com/Hyunkim95/mailbox.
 - Functional demo URL and dedicated judge login: pending hosting and live acceptance.
 - Public YouTube URL: pending recording and upload.
 - Team identity and entrant declarations: owner-provided fields.

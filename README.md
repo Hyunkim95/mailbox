@@ -110,6 +110,6 @@ The [submission draft and recording plan](SUBMISSION.md) keep the presentation t
 
 Use persistent storage for `data/app.sqlite` and `data/merchant.sqlite`, keep private app/merchant secrets stable and serve HTTPS. PayPal callback: `/webhooks/paypal`; AgentMail callback: `/api/webhooks/agentmail`. Keep hosting available through the judging window.
 
-Public repository URL, hosted demo URL, real sandbox acceptance evidence and final YouTube video are pending. No Devpost submission has been made. Agent names and natural-language dashboard customization are outside the critical build; the latter is explicitly a nice-to-have.
+Public source: [Hyunkim95/mailbox](https://github.com/Hyunkim95/mailbox). Hosted demo URL, real sandbox acceptance evidence and final YouTube video are pending. No Devpost submission has been made. Agent names and natural-language dashboard customization are outside the critical build; the latter is explicitly a nice-to-have.
 
 MIT licensed. The service SDK is an internal workspace package, not an adopted or published merchant network.
