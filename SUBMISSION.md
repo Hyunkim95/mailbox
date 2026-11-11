@@ -22,20 +22,22 @@ Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vau
 
 ## Recording plan
 
-Target 2:45. Record actual application operation after live acceptance. Keep cuts visible where a provider wait is shortened, and retain the matching real payment and message evidence. Use the invented assets and original narration.
+Target 2:50. Record actual application operation after live acceptance. Keep cuts visible where a provider wait is shortened, and retain the matching real payment and message evidence. Payment and activation scenes are conditional on successful real-provider validation. Use the invented assets and original narration.
 
 | Time | On screen | Narration |
 | --- | --- | --- |
-| 0:00 to 0:20 | Before Mailbox inbox, then Reel’s agent workspace and address | “Maya's services keep sending offers and renewal notices. She wants to watch one film, but finding the right service and remembering the payment are separate jobs. Mailbox gives her agents a home for their services, messages and decisions.” |
-| 0:20 to 0:40 | In Reel, type the film request, compare three options, choose one month | “Maya asks Reel for The Lantern Coast. Her agent checks the services through MCP and compares the current options. Maya chooses one month, with renewal disabled.” |
-| 0:40 to 1:00 | Wallet permission and actual sandbox consent | “Every service gets its own wallet. Maya sets its spending limit and approval rules, then connects PayPal in the sandbox.” |
-| 1:00 to 1:20 | Actual capture, service row, received email and cancellation date | “The service activates after payment is independently verified. Its address, confirmation, wallet debit and cancellation date stay together.” |
-| 1:20 to 1:35 | Coffee comparison, source email, approved purchase and receipt | “For coffee, the agent compares current pack prices per kilogram, checks stock and ignores expired offers.” |
-| 1:35 to 1:50 | Friday table, deposit proposal and confirmed booking | “For dinner, it checks an available table and shows the exact deposit before booking.” |
-| 1:50 to 2:05 | Exact pet-food rule, one capture and receipt | “For pet food, Maya can approve a one-time purchase below her chosen price. That rule applies to this exact item.” |
-| 2:05 to 2:25 | Upsell message, quiet decline, wallet ledger | “An email cannot expand that permission. The upgrade stays unapproved, and Maya can see the decision or disconnect spending.” |
-| 2:25 to 2:35 | SDK configuration beside the resulting service | “Our invented merchants use a small SDK over MCP and PayPal. Here is how another supported service would integrate.” |
-| 2:35 to 2:45 | Agent workspaces, a saved AG Studio dashboard, and distinct service wallets | “An address for each agent. A separate wallet for each service. Help with the jobs you choose, within the limits you set.” |
+| 0:00 to 0:18 | Before Mailbox inbox, then named agent cards and Reel’s address | “Maya’s services keep sending offers and renewal notices. She wants to watch one film, find a coffee deal, and keep track of what she buys. Mailbox gives her agents a home for their services, messages and decisions.” |
+| 0:18 to 0:36 | In Reel, type the film request, compare MCP options and choose one month | “Maya asks Reel for The Lantern Coast. Her agent checks three invented services through MCP and compares current prices and terms. She chooses one month of Coast Screen, with renewal disabled.” |
+| 0:36 to 0:54 | Show acting agent, alias, independent service wallet and actual sandbox consent | “The purchase belongs to Reel and uses Reel’s address. Each service has its own wallet. Maya controls the spending cap, expiry and approval rules, then connects PayPal in the sandbox.” |
+| 0:54 to 1:12 | Verified capture, merchant activation, received confirmation and cancellation date | “The merchant verifies the payment before activating access. Mailbox keeps the exact charge, received confirmation and cancellation date together. Retries retain the same payment identity, so an uncertain response does not start another purchase.” |
+| 1:12 to 1:25 | Pantry coffee pack comparison, expired offer, native HTML source and selected proposal | “Pantry compares coffee by price per kilogram, checks current stock and excludes expired offers. Its newsletter reader keeps the checkout discount separate from advertised future cashback.” |
+| 1:25 to 1:35 | Table’s available Friday reservation, exact deposit and actual confirmation | “For dinner, the agent checks an available Friday table and shows the deposit before booking for two.” |
+| 1:35 to 1:47 | Paws exact product, threshold, permission and one verified execution | “For pet food, Maya approves a one-time rule below her chosen price. It applies to this exact food and bag size, within that service’s limits.” |
+| 1:47 to 2:00 | Agent-scoped Channel3 search for headphones, actual priced offers and retailer links | “For a wider search, Channel Three returns real product offers. These retailer links are discovery handoffs. This build does not claim an automated purchase at those retailers.” |
+| 2:00 to 2:18 | AG Studio natural-language layout preview, actual changed chart and saved agent dashboard | “Each agent has its own dashboard. With A G Studio, Maya can ask for a different view of spending, messages or decisions. She previews the result and saves it for that agent. Dashboard edits cannot change payment permission.” |
+| 2:18 to 2:30 | Malicious or upsell sample, no resulting charge, wallet activity and disconnect control | “An email cannot grant spending authority. An unrequested upgrade stays unapproved. Maya can inspect the source, review the wallet’s activity, pause it or disconnect its payment permission.” |
+| 2:30 to 2:40 | SDK configuration alongside its actual fixture MCP tools | “Our invented merchants use a small SDK over MCP and PayPal. Supported services share the same catalogue, payment and structured confirmation code.” |
+| 2:40 to 2:50 | Agent cards, reusable addresses and distinct service wallets | “An address for each agent. A separate wallet for each service. Help with the jobs you choose, within the limits you set.” |
 
 ## Final entry fields
 
