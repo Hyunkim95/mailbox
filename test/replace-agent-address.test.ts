@@ -42,6 +42,7 @@ test("replacement requires an absent inbox and preserves scoped history without 
         throw new AgentMailError({ statusCode: 404 });
       },
       create: async (input: { clientId: string }) => {
+        assert.match(input.clientId, /^[A-Za-z0-9._~-]+$/);
         created.push(input.clientId);
         return { inboxId: "dev@example.test", email: "dev@example.test" };
       },

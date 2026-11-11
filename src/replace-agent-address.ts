@@ -105,7 +105,7 @@ export async function replaceMissingAgentAddress(
   const inbox = await provider.create({
     username: `${slug}-${agentId.slice(0, 8)}`,
     displayName: original.name,
-    clientId: `replace:${agentId}:${suffix}`,
+    clientId: `replace-${agentId}-${suffix}`,
   });
   store.db.exec("BEGIN IMMEDIATE");
   try {
