@@ -43,5 +43,6 @@ services:
         sync: false
       - key: AGENTMAIL_API_KEY
         sync: false
-      - key: OPENAI_API_KEY
+      - key: AI_PROVIDER
         sync: false
+      # Add only the selected provider API key in the service Environment settings.

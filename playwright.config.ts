@@ -41,6 +41,8 @@ export default defineConfig({
       AGENTMAIL_API_KEY: "",
       AGENTMAIL_WEBHOOK_SECRET: "",
       OPENAI_API_KEY: "",
+      ANTHROPIC_API_KEY: "",
+      AI_PROVIDER: "openai",
       RENDER_API_KEY: "",
     },
   },

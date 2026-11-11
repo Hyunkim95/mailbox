@@ -16,7 +16,7 @@ The model interprets requests and extracts typed email facts. It cannot grant pe
 
 The reference merchants use a thin TypeScript SDK over MCP and PayPal. Adding a service with an existing subscription, purchase or booking capability is a new configuration. The demo uses this SDK itself; no outside merchant adoption is claimed.
 
-Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 38 core tests and seven browser scenarios pass using real MCP calls and injected provider responses. Actual external-provider acceptance and hosted execution remain pending.
+Built with Next.js, TypeScript, SQLite, the official MCP SDK, PayPal sandbox Vault and Orders APIs, OpenAI or Claude structured outputs and AgentMail. All merchant names, products, film and fixture messages are invented. At this checkpoint, 44 core tests and seven browser scenarios pass using real MCP calls and injected provider responses. Real OpenAI request interpretation and email extraction passed a direct API check. Real Anthropic, payment/email-provider acceptance and hosted execution remain pending.
 
 ## Recording plan
 

@@ -25,6 +25,7 @@
     "setup:local": "node scripts/setup-local.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@mailbox/service-sdk": "*",
     "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/node": "2.1.2",

@@ -38,12 +38,14 @@ Fill `.env` using `.env.example`:
 | `PAYPAL_WEBHOOK_ID` | Registered capture webhook ID after hosting |
 | `AGENTMAIL_API_KEY` | Dedicated receiving inboxes and controlled merchant sending |
 | `AGENTMAIL_WEBHOOK_SECRET` | Signed inbound webhook verification |
-| `OPENAI_API_KEY`, optional `OPENAI_MODEL` | Structured request interpretation and email extraction |
+| `AI_PROVIDER` | `openai` or `anthropic`; blank auto-selects Claude when only its key is configured |
+| `OPENAI_API_KEY`, optional `OPENAI_MODEL` | OpenAI request interpretation and email extraction |
+| `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL` | Alternative Claude request interpretation and email extraction |
 | `RENDER_API_KEY`, `RENDER_OWNER_ID` | Hosting setup, if using Render |
 
 Four service addresses plus merchant sending need sufficient inbox capacity. Do not assume the three-inbox free plan covers the full demonstration. Model-backed requests, provider delivery, real Vault charging and hosted execution must be verified with the actual configured accounts. Offline tests use explicit provider fixtures and do not establish sandbox acceptance.
 
-Without service credentials, the app supports clearly labeled fixture walkthroughs and preview emails. It does not invent completed payments, received mail or model calls. The default model is `gpt-5-mini`; choose an accessible structured-output model through `OPENAI_MODEL` if needed.
+Without service credentials, the app supports clearly labeled fixture walkthroughs and preview emails. It does not invent completed payments, received mail or model calls. Choose one provider, with no automatic billing fallback. OpenAI defaults to `gpt-6.1-sol`; Claude defaults to `claude-sonnet-5-5`. Override through `OPENAI_MODEL` or `ANTHROPIC_MODEL`. To use Anthropic API credits, set `AI_PROVIDER=anthropic` and fill `ANTHROPIC_API_KEY`. Both providers use constrained JSON output and local schema validation; neither receives payment or action tools.
 
 ## Demonstration data and reset
 
@@ -102,7 +104,7 @@ Core checks exercise actual MCP HTTP clients plus injected PayPal responses, fin
 
 A fresh public clone on Linux passed installation, private local setup, all 38 core checks and the production build. Its running server also passed generated-key login, 24-message preview loading, three MCP film options and the coffee quote, with no provider credentials or claimed payments.
 
-A live acceptance run must additionally prove saved-token charging, the real merchant callback and received email, model-backed requests, cancellation/condition behavior and the post-approval timing target. Submission claims must follow that evidence.
+Current checks: 44 core tests and seven browser scenarios pass. A real `gpt-6.1-sol` API run also passed request interpretation and extraction of separate discount and cashback values. Claude requests pass injected SDK transport tests; a real Anthropic call is pending its API key. A live acceptance run must additionally prove saved-token charging, the real merchant callback and received email, full model-backed application requests, cancellation/condition behavior and the post-approval timing target. Submission claims must follow that evidence.
 
 ## Hosting and submission
 
@@ -112,6 +114,6 @@ The [submission draft and recording plan](SUBMISSION.md) keep the presentation t
 
 Use persistent storage for `data/app.sqlite` and `data/merchant.sqlite`, keep private app/merchant secrets stable and serve HTTPS. PayPal callback: `/webhooks/paypal`; AgentMail callback: `/api/webhooks/agentmail`. Keep hosting available through the judging window.
 
-Public source: [Hyunkim95/mailbox](https://github.com/Hyunkim95/mailbox). Hosted demo URL, real sandbox acceptance evidence and final YouTube video are pending. No Devpost submission has been made. Agent names and natural-language dashboard customization are outside the critical build; the latter is explicitly a nice-to-have.
+Public source: [Hyunkim95/mailbox](https://github.com/Hyunkim95/mailbox). Hosted demo URL, real sandbox acceptance evidence and final YouTube video are pending. No Devpost submission has been made. Agent names, natural-language dashboard customization and manual signups using one shared email address per niche remain follow-on features. Shared niche mail will not merge service wallets; the current fixture flow still provisions per-service inboxes.
 
 MIT licensed. The service SDK is an internal workspace package, not an adopted or published merchant network.

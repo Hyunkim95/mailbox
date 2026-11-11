@@ -6,7 +6,13 @@ import {
   type Service,
 } from "@mailbox/service-sdk";
 import { AppStore, periodKey } from "./app-store.ts";
-import { configured, interpretAsk, modelName, type AskIntent } from "./ai.ts";
+import {
+  configured,
+  interpretAsk,
+  modelName,
+  modelReady,
+  type AskIntent,
+} from "./ai.ts";
 import type { AppState, Proposal, Wallet } from "./app-model.ts";
 import { merchantTool } from "./service-connector.ts";
 import { PayPal } from "./paypal.ts";
@@ -35,7 +41,7 @@ export class AppService {
           configured("PAYPAL_CLIENT_SECRET") &&
           configured("PAYPAL_MERCHANT_ID"),
         email: configured("AGENTMAIL_API_KEY"),
-        model: configured("OPENAI_API_KEY"),
+        model: modelReady(),
         merchant: configured("MOCK_MERCHANT_TOKEN"),
       },
       model_name: modelName(),
@@ -62,7 +68,7 @@ export class AppService {
       );
     const services = await this.services();
     let intent: AskIntent;
-    if (example && !configured("OPENAI_API_KEY")) {
+    if (example && !modelReady()) {
       const today = this.store.now();
       const local = new Date(today.getTime() + 4 * 60 * 60 * 1000);
       const weekday = local.getUTCDay();
@@ -109,8 +115,7 @@ export class AppService {
             facts: m.facts,
           })),
       });
-    const engine =
-      example && !configured("OPENAI_API_KEY") ? "fixture" : "model";
+    const engine = example && !modelReady() ? "fixture" : "model";
     this.store.log(
       owner,
       "REQUEST_INTERPRETED",
