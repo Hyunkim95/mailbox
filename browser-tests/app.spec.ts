@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { Webhook } from "svix";
 async function login(page: Page, agent = "Reel") {
   await page.goto("/");
   await page.getByLabel("Demo access key").fill("mailbox-browser-test-access");
@@ -399,4 +400,37 @@ test("an unrelated search error is not shown as a pending payment error", async 
   await expect(page.locator(".proposal-card")).not.toContainText(
     "Channel3 connection",
   );
+});
+
+test("AgentMail verifies the raw signature before parsing a signed event", async ({
+  request,
+}) => {
+  const verifier = new Webhook(
+    `whsec_${Buffer.alloc(32, 1).toString("base64")}`,
+  );
+  const id = "msg_browser_webhook";
+  const now = new Date();
+  const raw = JSON.stringify({ event_type: "message.received" });
+  const signedHeaders = (text: string) => ({
+    "content-type": "application/json",
+    "svix-id": id,
+    "svix-timestamp": String(Math.floor(now.getTime() / 1000)),
+    "svix-signature": verifier.sign(id, now, text),
+  });
+  const valid = await request.post("/api/webhooks/agentmail", {
+    headers: signedHeaders(raw),
+    data: raw,
+  });
+  expect(valid.status()).toBe(200);
+  expect(await valid.json()).toEqual({ accepted: true });
+  const tampered = await request.post("/api/webhooks/agentmail", {
+    headers: signedHeaders(raw),
+    data: raw + " ",
+  });
+  expect(tampered.status()).toBe(401);
+  const invalid = await request.post("/api/webhooks/agentmail", {
+    headers: signedHeaders("null"),
+    data: "null",
+  });
+  expect(invalid.status()).toBe(400);
 });

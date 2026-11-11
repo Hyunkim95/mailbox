@@ -28,7 +28,7 @@ const isolatedServer = {
     PAYPAL_MERCHANT_ID: "",
     PAYPAL_WEBHOOK_ID: "",
     AGENTMAIL_API_KEY: "",
-    AGENTMAIL_WEBHOOK_SECRET: "",
+    AGENTMAIL_WEBHOOK_SECRET: `whsec_${Buffer.alloc(32, 1).toString("base64")}`,
     OPENAI_API_KEY: "",
     ANTHROPIC_API_KEY: "",
     AI_PROVIDER: "openai",

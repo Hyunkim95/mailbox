@@ -249,10 +249,17 @@ export async function POST(request: NextRequest, context: Context) {
       };
       let event: unknown;
       try {
-        event = new Webhook(signing).verify(raw, headers);
+        new Webhook(signing).verify(raw, headers);
       } catch {
         return response({ error: "INVALID_SIGNATURE" }, 401);
       }
+      try {
+        event = JSON.parse(raw);
+      } catch {
+        return response({ error: "INVALID_EVENT" }, 400);
+      }
+      if (!event || typeof event !== "object" || Array.isArray(event))
+        return response({ error: "INVALID_EVENT" }, 400);
       const payload = event as {
         message?: { inbox_id?: string; inboxId?: string };
       };
