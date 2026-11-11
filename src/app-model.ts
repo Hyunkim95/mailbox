@@ -1,4 +1,11 @@
 export type PermissionMode = "draft" | "ask" | "auto";
+/** How an agent's drawn face looks. Each field is an index into the avatar's options. */
+export type AgentLook = {
+  hair: number;
+  eyes: number;
+  mouth: number;
+  color: number;
+};
 export type PersonalAgent = {
   id: string;
   owner: string;
@@ -9,6 +16,8 @@ export type PersonalAgent = {
   inbox_id: string | null;
   template: string | null;
   status: "draft" | "connected" | "paused";
+  /** Chosen by the owner. Without it the face is derived from the agent id. */
+  look?: AgentLook;
   created_at: string;
 };
 export type PublicAgent = Omit<PersonalAgent, "owner" | "inbox_id">;
@@ -161,6 +170,8 @@ export type AppState = {
   wallets: PublicWallet[];
   proposals: Proposal[];
   messages: Message[];
+  /** Ids of messages the owner dismissed from the "needs you" queue. */
+  dismissed: string[];
   audit: Audit[];
   configuration: {
     paypal: boolean;

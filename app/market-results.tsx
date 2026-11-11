@@ -1,17 +1,15 @@
 "use client";
 import { ArrowUpRight } from "lucide-react";
 import type { MarketResult } from "../src/market";
+import { SectionHead } from "./ui";
+
 export function MarketResults({ result }: { result: MarketResult }) {
   return (
-    <section className="market-results">
-      <div className="section-heading">
-        <div>
-          <div className="eyebrow">Across the market</div>
-          <h2>{result.query}</h2>
-        </div>
-        <span className="source-pill">Channel3 · US catalogue</span>
-      </div>
-      <p className="market-caption">
+    <section>
+      <SectionHead title={result.query}>
+        <span className="ui-quiet">Channel3 · US catalogue</span>
+      </SectionHead>
+      <p className="ui-note">
         Listed product prices, checked{" "}
         {new Date(result.checked_at).toLocaleTimeString([], {
           hour: "2-digit",
@@ -20,14 +18,14 @@ export function MarketResults({ result }: { result: MarketResult }) {
         . Shipping and taxes depend on the retailer.
       </p>
       {!result.products.length ? (
-        <div className="answer-card">
-          No current offers matched this search. Try a broader product
-          description.
+        <div className="ui-empty">
+          <h3>No current offers matched</h3>
+          <p>Try a broader product description.</p>
         </div>
       ) : (
-        <div className="market-grid">
+        <div className="ui-products">
           {result.products.map((product) => (
-            <article className="market-product" key={product.id}>
+            <article className="ui-product" key={product.id}>
               {product.image && (
                 <img
                   src={product.image}
@@ -39,13 +37,14 @@ export function MarketResults({ result }: { result: MarketResult }) {
               <div>
                 <small>{product.brand}</small>
                 <h3>{product.title}</h3>
+              </div>
+              <div>
                 {product.offers.slice(0, 3).map((offer, index) => (
                   <a
                     key={offer.url + index}
                     href={offer.url}
                     target="_blank"
                     rel="noopener noreferrer sponsored"
-                    className="market-offer"
                   >
                     <span>{offer.merchant}</span>
                     <strong>
@@ -62,7 +61,7 @@ export function MarketResults({ result }: { result: MarketResult }) {
           ))}
         </div>
       )}
-      <p className="market-caption">
+      <p className="ui-note">
         Open an offer to review and buy at the store.{" "}
         {result.products.some((p) => p.offers.some((o) => o.affiliate)) &&
           "Some product links may earn a commission."}

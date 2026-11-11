@@ -3,7 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 import fixtureEmails from "../fixtures/emails.json" with { type: "json" };
 import { MerchantError } from "@mailbox/service-sdk";
 import type { AppStore } from "./app-store.ts";
-import type { Wallet, PersonalAgent } from "./app-model.ts";
+import type { Wallet, PersonalAgent, Message } from "./app-model.ts";
 import { defaultAgent } from "./agents.ts";
 import { catalogue } from "./catalogue.ts";
 import { configured, extractEmail } from "./ai.ts";
@@ -245,6 +245,26 @@ async function syncMailbox(
         facts.amount_minor,
       );
   }
+}
+/** Sends the owner-approved reply from the agent's own inbox, once per key. */
+export async function sendAgentReply(
+  agent: PersonalAgent,
+  message: Message,
+  text: string,
+  idempotencyKey: string,
+): Promise<string> {
+  const inbox = agent.inbox_id!;
+  const reference = message.provider_id!;
+  const messageId = reference.startsWith(`${inbox}:`)
+    ? reference.slice(inbox.length + 1)
+    : reference;
+  const sent = await client().inboxes.messages.reply(
+    inbox,
+    messageId,
+    { text },
+    { idempotencyKey: `mailbox-reply-${idempotencyKey}` },
+  );
+  return sent.messageId;
 }
 export async function deliverOutbox(store: AppStore) {
   if (!configured("AGENTMAIL_API_KEY")) return;

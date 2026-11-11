@@ -11,7 +11,7 @@ import {
   type AgReportState,
   type AgStudioApi,
 } from "ag-studio";
-import { ArrowUp, LoaderCircle, RotateCcw, Save } from "lucide-react";
+import { ArrowUp } from "lucide-react";
 import type { AppState, PublicAgent } from "../src/app-model";
 import {
   dashboardData,
@@ -20,21 +20,27 @@ import {
   type DashboardNiche,
 } from "../src/dashboard-data";
 import { studioAdapter } from "./studio-adapter";
+import { Button, LinkButton } from "./ui";
 
-const theme = studioTheme.withParams({
-  backgroundColor: "#f7f6f0",
-  textColor: "#1e3027",
-  fontFamily: "DM Sans, sans-serif",
-  borderColor: "#d9e2cc",
-  studioMinWidth: 0,
-  studioCanvasMinWidth: 280,
-  studioMinHeight: 520,
-  studioWidgetBackgroundColor: "#fffefa",
-  studioWidgetTitleFontSize: 18,
-  studioWidgetTitleFontWeight: 600,
-  chartPaletteFills1Color: "#537d44",
-  chartPaletteFills2Color: "#abbf81",
-});
+/** The embedded studio takes literal values, so read them from the design tokens. */
+function studioThemeFromTokens() {
+  const css = getComputedStyle(document.documentElement);
+  const token = (name: string) => css.getPropertyValue(name).trim();
+  return studioTheme.withParams({
+    backgroundColor: token("--bg"),
+    textColor: token("--ink"),
+    fontFamily: `${token("--font-geist")}, system-ui, sans-serif`,
+    borderColor: token("--line-strong"),
+    studioMinWidth: 0,
+    studioCanvasMinWidth: 280,
+    studioMinHeight: 520,
+    studioWidgetBackgroundColor: token("--surface"),
+    studioWidgetTitleFontSize: 15,
+    studioWidgetTitleFontWeight: 600,
+    chartPaletteFills1Color: token("--chart-1"),
+    chartPaletteFills2Color: token("--chart-2"),
+  });
+}
 export default function NicheDashboard({
   state,
   agent,
@@ -77,20 +83,12 @@ export default function NicheDashboard({
     return () => controller.abort();
   }, [niche, agent?.id]);
   return (
-    <section className="niche-dashboard">
-      <div className="page-heading">
-        <div>
-          <div className="eyebrow">Your view of your services</div>
-          {agent ? (
-            <h2>{agent.name}’s dashboard</h2>
-          ) : (
-            <h1>Niche dashboards</h1>
-          )}
-          <p>See what matters, then shape this view in your own words.</p>
-        </div>
-        {!agent && (
-          <label className="niche-picker">
-            Niche
+    <section className="ui-col ui-wide">
+      {!agent && (
+        <div className="ui-toolbar">
+          <h1 className="ui-title">Dashboards</h1>
+          <label>
+            Niche{" "}
             <select
               value={niche}
               onChange={(e) => {
@@ -111,10 +109,10 @@ export default function NicheDashboard({
               ))}
             </select>
           </label>
-        )}
-      </div>
+        </div>
+      )}
       {error && (
-        <p role="alert" className="feedback error">
+        <p role="alert" className="ui-note is-danger">
           {error}
         </p>
       )}
@@ -129,7 +127,11 @@ export default function NicheDashboard({
           onDirty={setDirty}
         />
       ) : (
-        !error && <p role="status">Opening your saved dashboard…</p>
+        !error && (
+          <p role="status" className="ui-note">
+            Opening your saved dashboard
+          </p>
+        )
       )}
     </section>
   );
@@ -160,6 +162,7 @@ function Canvas({
     [edit, setEdit] = useState(false),
     [ready, setReady] = useState(false);
   const data = useMemo(() => dashboardData(state, niche), [state, niche]);
+  const theme = useMemo(studioThemeFromTokens, []);
   useEffect(
     () => () => {
       session.current?.cancel();
@@ -285,114 +288,96 @@ function Canvas({
   }
   return (
     <>
+      <label className="ui-label" htmlFor="dashboard-prompt">
+        Customize this dashboard
+      </label>
       <form
-        className="dashboard-prompt ask-surface"
+        className="ui-ask"
         onSubmit={(e) => {
           e.preventDefault();
           void customize();
         }}
       >
-        <label htmlFor="dashboard-prompt">Customize this dashboard</label>
-        <div className="ask-form">
-          <input
-            id="dashboard-prompt"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Show message counts by kind as a bar chart…"
-            disabled={busy || !state.configuration.model}
-          />
-          <button
-            className="ask-submit"
-            aria-label="Customize dashboard"
-            disabled={
-              busy || !ready || !prompt.trim() || !state.configuration.model
-            }
-          >
-            {busy ? (
-              <LoaderCircle size={19} className="spin" />
-            ) : (
-              <ArrowUp size={19} />
-            )}
-          </button>
-        </div>
-        <small>
-          Changes affect this view. Review them, then save the layout.
-        </small>
+        <input
+          id="dashboard-prompt"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="Show message counts by kind as a bar chart"
+          disabled={busy || !state.configuration.model}
+        />
+        <Button
+          type="submit"
+          variant="icon"
+          aria-label="Customize dashboard"
+          busy={busy}
+          disabled={
+            busy || !ready || !prompt.trim() || !state.configuration.model
+          }
+        >
+          <ArrowUp size={16} />
+        </Button>
       </form>
-      {!state.configuration.model && (
-        <p className="connection-note">
-          Connect a model to customize with natural language. You can still edit
-          the layout.
-        </p>
-      )}
-      <div className="dashboard-toolbar">
+      <p className="ui-note">
+        {state.configuration.model
+          ? "Changes affect this view only. Review them, then save the layout."
+          : "No model is connected, so typed changes will not work here. You can still edit the layout by hand."}
+      </p>
+      <div className="ui-toolbar">
         <span>
           {busy
-            ? "Updating your dashboard…"
+            ? "Updating your dashboard"
             : dirty
               ? "Unsaved layout changes"
-              : "Your saved view"}
+              : "Saved layout"}
         </span>
-        <div>
-          {busy && (
-            <button
-              className="text-button"
-              onClick={() => {
-                session.current?.cancel();
-                setBusy(false);
-              }}
-            >
-              Cancel
-            </button>
-          )}
-          <button
-            className="text-button"
-            onClick={() => setEdit(!edit)}
-            disabled={busy}
-          >
-            {edit ? "Preview layout" : "Edit layout"}
-          </button>
-          <button
-            className="text-button"
-            disabled={busy || !ready}
+        {busy && (
+          <LinkButton
             onClick={() => {
-              api.current?.setState(
-                defaultDashboard(
-                  state.wallets.some(
-                    (w) => niche === "all" || w.category === niche,
-                  ),
-                ),
-              );
-              onDirty(true);
-              setFeedback(
-                "Default layout restored in preview. Save to keep it.",
-              );
+              session.current?.cancel();
+              setBusy(false);
             }}
           >
-            <RotateCcw size={14} />
-            Restore default
-          </button>
-          <button
-            className={dirty ? "primary" : "secondary"}
-            disabled={busy || saving || !ready || !dirty}
-            onClick={() => void save()}
-          >
-            <Save size={14} />
-            {saving ? "Saving…" : "Save layout"}
-          </button>
-        </div>
+            Cancel
+          </LinkButton>
+        )}
+        <LinkButton onClick={() => setEdit(!edit)} disabled={busy}>
+          {edit ? "Preview layout" : "Edit layout"}
+        </LinkButton>
+        <LinkButton
+          disabled={busy || !ready}
+          onClick={() => {
+            api.current?.setState(
+              defaultDashboard(
+                state.wallets.some(
+                  (w) => niche === "all" || w.category === niche,
+                ),
+              ),
+            );
+            onDirty(true);
+            setFeedback("Default layout restored in preview. Save to keep it.");
+          }}
+        >
+          Restore default
+        </LinkButton>
+        <Button
+          variant={dirty ? "primary" : "default"}
+          disabled={busy || saving || !ready || !dirty}
+          onClick={() => void save()}
+        >
+          {saving ? "Saving" : "Save layout"}
+        </Button>
       </div>
       {error && (
-        <p className="feedback error" role="alert">
+        <p className="ui-note is-danger" role="alert">
           {error}
         </p>
       )}
       {feedback && (
-        <p className="feedback" role="status">
+        <p className="ui-note" role="status">
           {feedback}
         </p>
       )}
-      <div className="studio-canvas" data-testid="niche-studio">
+      <div className="ui-canvas" data-testid="niche-studio">
         <AgStudioProvider
           modules={[AgStudioAiModule]}
           {...(process.env.NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY
@@ -434,9 +419,9 @@ function Canvas({
           />
         </AgStudioProvider>
       </div>
-      <p className="market-caption">
-        Powered by AG Studio. Values come from your service wallets, proposals
-        and stored messages.
+      <p className="ui-note">
+        Built with AG Studio. Values come from your wallets, proposals and
+        messages.
       </p>
     </>
   );

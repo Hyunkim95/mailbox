@@ -4,9 +4,7 @@ async function login(page: Page, agent = "Reel") {
   await page.goto("/");
   await page.getByLabel("Demo access key").fill("mailbox-browser-test-access");
   await page.getByRole("button", { name: "Open Mailbox" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Your agents." }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: /needs? you/ })).toBeVisible();
   const state = await (await page.request.get("/api/state")).json();
   expect(state.configuration.paypal).toBe(false);
   expect(state.configuration.email).toBe(false);
@@ -19,14 +17,14 @@ async function login(page: Page, agent = "Reel") {
   ).toBeVisible();
 }
 async function seed(page: Page) {
-  await page.getByText("Demo setup", { exact: true }).click();
-  await page.getByRole("button", { name: "Load preview emails" }).click();
+  await page.getByRole("button", { name: "Demo", exact: true }).click();
+  await page.getByRole("button", { name: "Load sample messages" }).click();
   await expect(
     page.getByRole("button", { name: "Inbox 6", exact: true }),
   ).toBeVisible();
 }
 
-test("streaming choices lead to explicit wallet permission and honest missing-credential state", async ({
+test("streaming choices lead to a visible wallet permission and honest missing-credential state", async ({
   page,
 }) => {
   await login(page);
@@ -37,7 +35,7 @@ test("streaming choices lead to explicit wallet permission and honest missing-cr
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: /Coast Screen \$7.99/ }),
+    page.getByRole("button", { name: /Coast Screen.*\$7\.99/ }),
   ).toHaveAttribute("aria-pressed", "true");
   await page
     .getByRole("button", { name: "Review proposal", exact: true })
@@ -46,10 +44,25 @@ test("streaming choices lead to explicit wallet permission and honest missing-cr
     page.getByRole("heading", { name: "One month of Coast Screen" }),
   ).toBeVisible();
   const approve = page.getByRole("button", {
-    name: "Approve & connect PayPal",
+    name: "Approve and connect PayPal",
   });
+  const permission = page.getByRole("group", { name: "Payment permission" });
+  await expect(
+    permission.getByRole("button", { name: "Ask every time", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(approve).toBeEnabled();
+  await permission
+    .getByRole("button", { name: "Draft only", exact: true })
+    .click();
   await expect(approve).toBeDisabled();
-  await page.getByLabel("Payment permission").selectOption("ask");
+  await expect(
+    page.getByText(
+      "Draft only cannot pay. Choose another permission to approve.",
+    ),
+  ).toBeVisible();
+  await permission
+    .getByRole("button", { name: "Ask every time", exact: true })
+    .click();
   await expect(approve).toBeEnabled();
   await approve.click();
   await expect(
@@ -74,12 +87,12 @@ test("fixture mail, original source view and keyboard dismissal work without a c
     .getByRole("button", { name: /This week: house coffee, 250 g/ })
     .click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByRole("dialog")).toContainText("Fixture preview");
+  await expect(page.getByRole("dialog")).toContainText("Sample preview");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { name: "Service messages", exact: true }),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Inbox 6", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
 });
 test("coffee proposal explains unit comparison, stale rejection and source evidence", async ({
   page,
@@ -92,17 +105,23 @@ test("coffee proposal explains unit comparison, stale rejection and source evide
   await expect(
     page.getByRole("heading", { name: "Why this deal", exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".proposal-rationale")).toContainText(
+  await expect(page.getByTestId("proposal-rationale")).toContainText(
     "excluded 1 expired email offer",
   );
   await expect(
-    page.locator(".deal-comparison tbody tr").filter({ hasText: "250 g" }),
+    page
+      .getByTestId("deal-comparison")
+      .locator("tbody tr")
+      .filter({ hasText: "250 g" }),
   ).toContainText(/\$6\.50.*\$26\.00/);
   await expect(
-    page.locator(".deal-comparison tbody tr").filter({ hasText: "500 g" }),
+    page
+      .getByTestId("deal-comparison")
+      .locator("tbody tr")
+      .filter({ hasText: "500 g" }),
   ).toContainText(/\$14\.75.*\$29\.50/);
   await page
-    .locator(".source-links")
+    .getByTestId("source-links")
     .getByRole("button", { name: /This week: house coffee/ })
     .click();
   await expect(page.getByRole("dialog")).toContainText("coffee-250g");
@@ -153,7 +172,7 @@ test("reset creates a fresh workspace and cancels queued authority", async ({
   await expect(
     page.getByRole("heading", { name: "House coffee, 250 g", exact: true }),
   ).toBeVisible();
-  await page.getByText("Demo setup", { exact: true }).click();
+  await page.getByRole("button", { name: "Demo", exact: true }).click();
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByRole("button", { name: "Reset workspace", exact: true })
@@ -273,9 +292,6 @@ test("market search reports missing Channel3 access without a fabricated product
 }) => {
   await login(page, "Pantry");
   await page
-    .getByRole("button", { name: "Across the market", exact: true })
-    .click();
-  await page
     .getByRole("textbox", { name: /^Ask / })
     .fill("wireless headphones under $100");
   await page.getByRole("button", { name: "Send request", exact: true }).click();
@@ -300,9 +316,8 @@ test.describe("phone layout", () => {
     await expect(
       page.getByRole("heading", { name: "One month of Coast Screen" }),
     ).toBeVisible();
-    await page.getByLabel("Payment permission").selectOption("ask");
     await expect(
-      page.getByRole("button", { name: "Approve & connect PayPal" }),
+      page.getByRole("button", { name: "Approve and connect PayPal" }),
     ).toBeEnabled();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
@@ -314,7 +329,7 @@ test.describe("phone layout", () => {
   });
 });
 
-test("agent sections stay nested without replacing global navigation", async ({
+test("agent sections switch with the agent without replacing global navigation", async ({
   page,
 }) => {
   await login(page, "Reel");
@@ -322,30 +337,34 @@ test("agent sections stay nested without replacing global navigation", async ({
     name: "Your space",
     exact: true,
   });
+  const agentNavigation = page.getByRole("navigation", {
+    name: "Agents",
+    exact: true,
+  });
   const reelSections = page.getByRole("navigation", {
     name: "Reel sections",
     exact: true,
   });
   await expect(
-    globalNavigation.getByRole("button", { name: /All messages/ }),
+    globalNavigation.getByRole("button", { name: /^Messages/ }),
   ).toBeVisible();
   await expect(
     reelSections.getByRole("button", { name: "Overview", exact: true }),
   ).toHaveAttribute("aria-current", "page");
+  await expect(
+    agentNavigation.getByRole("button", { name: "Open Reel", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
   const before = await globalNavigation.boundingBox();
-  await page
-    .getByRole("button", { name: "Open Pantry workspace", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Open Pantry", exact: true }).click();
   const pantrySections = page.getByRole("navigation", {
     name: "Pantry sections",
     exact: true,
   });
-  await expect(reelSections).toBeVisible();
   await expect(pantrySections).toBeVisible();
-  await expect(globalNavigation).toHaveText(
-    /Your agentsAll messages.*Before Mailbox/,
-  );
+  await expect(reelSections).toHaveCount(0);
+  await expect(globalNavigation).toHaveText(/Home.*Messages/);
   expect(await globalNavigation.boundingBox()).toEqual(before);
+  await page.getByRole("button", { name: "Open Reel", exact: true }).click();
   await reelSections.getByRole("button", { name: /^Inbox/ }).click();
   await expect(
     page.getByRole("heading", { name: "Reel", exact: true }),
@@ -353,7 +372,6 @@ test("agent sections stay nested without replacing global navigation", async ({
   await expect(
     reelSections.getByRole("button", { name: /^Inbox/ }),
   ).toHaveAttribute("aria-current", "page");
-  await expect(pantrySections).toBeVisible();
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "Reel", exact: true }),
@@ -372,10 +390,140 @@ test("agent sections stay nested without replacing global navigation", async ({
   await expect(
     page.getByRole("heading", { name: "One month of Coast Screen" }),
   ).toBeVisible();
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: /^\d+ things? needs? you$/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Waiting for your approval" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Review proposal", exact: true })
+    .click();
+  await expect(page.getByTestId("proposal")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Approve/ })).toBeEnabled();
   await page.screenshot({
-    path: "test-results/screenshots/nested-agent-navigation.png",
+    path: "test-results/screenshots/agent-navigation.png",
     fullPage: true,
   });
+});
+
+test("home rows carry the action that clears them", async ({ page }) => {
+  await login(page, "Pantry");
+  await seed(page);
+  await page.getByRole("button", { name: /^Home/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "2 things need you", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /^Dismiss: / }).click();
+  await expect(
+    page.getByRole("heading", { name: "1 thing needs you", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Dismiss: / })).toHaveCount(0);
+  await page.getByRole("button", { name: /^Pay \$10\.00: Invoice/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "Table", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("proposal")).toContainText(
+    "Pay Friday table deposit",
+  );
+  await expect(page.getByTestId("proposal")).toContainText("$10.00");
+  await page.getByRole("button", { name: /^Home/ }).click();
+  await expect(
+    page.getByRole("region", { name: "Waiting for your approval" }),
+  ).toContainText("Pay Friday table deposit");
+  await expect(page.getByRole("button", { name: /^Pay \$10\.00/ })).toHaveCount(
+    0,
+  );
+  const state = await (await page.request.get("/api/state")).json();
+  expect(state.dismissed).toHaveLength(1);
+  expect(state.proposals[0].capture_id).toBeNull();
+});
+
+test("an agent's look can be chosen or randomized and is saved", async ({
+  page,
+}) => {
+  await login(page, "Pantry");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Randomize", exact: true }).click();
+  await dialog.getByRole("button", { name: "Hair 3", exact: true }).click();
+  await dialog.getByRole("button", { name: "Eyes 2", exact: true }).click();
+  await dialog.getByRole("button", { name: "Colour 4", exact: true }).click();
+  await expect(
+    dialog.getByRole("button", { name: "Hair 3", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("button", { name: "Save agent", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const state = await (await page.request.get("/api/state")).json();
+  const pantry = state.agents.find(
+    (agent: { name: string }) => agent.name === "Pantry",
+  );
+  expect(pantry.look).toMatchObject({ hair: 2, eyes: 1, color: 3 });
+  await page.reload();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(
+    page.getByRole("dialog").getByRole("button", { name: "Colour 4" }),
+  ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("each agent offers its own suggestions, a digest and a reply that waits for approval", async ({
+  page,
+}) => {
+  await login(page, "Pantry");
+  await seed(page);
+  await expect(
+    page.getByRole("button", { name: "Find a coffee deal", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Watch a film", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "What’s new?", exact: true }).click();
+  const digest = page.getByRole("region", { name: "Digest" });
+  await expect(digest).toContainText("6 messages from Basil & Barley Market");
+  await expect(digest).toContainText("Nothing needs you");
+  await expect(digest).toContainText("Worth knowing");
+  await expect(digest).toContainText("Set aside");
+  await digest
+    .getByRole("button", { name: "Last week’s coffee special: $4.25" })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText("expired");
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("button", {
+      name: "Reply to Basil & Barley Market",
+      exact: true,
+    })
+    .click();
+  const reply = page.getByRole("region", { name: "Reply draft" });
+  await expect(reply).toContainText("Waiting for your approval");
+  await expect(reply.getByRole("textbox")).toHaveValue(
+    /Could you confirm the details/,
+  );
+  await expect(reply).toContainText("needs its own address");
+  await expect(
+    reply.getByRole("button", { name: "Send reply", exact: true }),
+  ).toBeDisabled();
+  const state = await (await page.request.get("/api/state")).json();
+  const pantry = state.agents.find(
+    (agent: { name: string }) => agent.name === "Pantry",
+  );
+  const message = state.messages.find(
+    (candidate: { agent_id: string; facts: { suspicious: boolean } }) =>
+      candidate.agent_id === pantry.id && !candidate.facts.suspicious,
+  );
+  const refused = await page.request.post("/api/command", {
+    data: { action: "send_reply", id: message.id, body: "Hello" },
+  });
+  expect(refused.ok()).toBe(false);
+  expect((await refused.json()).message).toContain(
+    "address before it can reply",
+  );
+  await reply.getByRole("button", { name: "Discard", exact: true }).click();
+  await expect(reply).toHaveCount(0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth));
 });
 
 test("an unrelated search error is not shown as a pending payment error", async ({
@@ -387,17 +535,14 @@ test("an unrelated search error is not shown as a pending payment error", async 
     .getByRole("button", { name: "Review proposal", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Across the market", exact: true })
-    .click();
-  await page
     .getByRole("textbox", { name: /^Ask / })
     .fill("wireless headphones under $100");
   await page.getByRole("button", { name: "Send request", exact: true }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "Channel3 connection" }),
   ).toBeVisible();
-  await expect(page.locator(".proposal-card")).toBeVisible();
-  await expect(page.locator(".proposal-card")).not.toContainText(
+  await expect(page.getByTestId("proposal")).toBeVisible();
+  await expect(page.getByTestId("proposal")).not.toContainText(
     "Channel3 connection",
   );
 });

@@ -1,3 +1,5 @@
+import { seedMessages } from "../src/seed.ts";
+import { digestFor } from "../src/queue.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -363,6 +365,125 @@ test("coffee and dining execute exact paid actions through the consumer orchestr
     }
     assert.equal(f.charges(), 2);
     assert.equal(f.merchant.outbox().length, 2);
+  } finally {
+    await f.close();
+  }
+});
+test("an invoice is prepared only at the service's own quote and a blocked message can be dismissed", async () => {
+  const f = await fixture();
+  try {
+    await seedMessages(f.store, "owner", false);
+    const state = f.app.state("owner");
+    const invoice = state.messages.find((m) => m.kind === "invoice")!;
+    const flagged = state.messages.find((m) => m.facts.suspicious)!;
+    const proposal = await f.app.payInvoice("owner", invoice.id);
+    assert.equal(proposal.status, "NEEDS_APPROVAL");
+    assert.equal(proposal.amount, invoice.facts.amount_minor);
+    assert.equal(proposal.title, "Pay Friday table deposit");
+    assert.deepEqual(proposal.sources, [invoice.id]);
+    assert.equal(proposal.agent_id, invoice.agent_id);
+    assert.ok(proposal.booking);
+    assert.equal(
+      (await f.app.payInvoice("owner", invoice.id)).id,
+      proposal.id,
+      "asking twice reuses the open proposal",
+    );
+    await assert.rejects(
+      f.app.payInvoice("owner", flagged.id),
+      /not an invoice/,
+    );
+    f.app.dismissMessage("owner", flagged.id);
+    f.app.dismissMessage("owner", flagged.id);
+    assert.deepEqual(f.app.state("owner").dismissed, [flagged.id]);
+    assert.equal(f.charges(), 0);
+  } finally {
+    await f.close();
+  }
+});
+test("a digest sorts one agent's messages and a reply goes out once, only to a delivered message, only after approval", async () => {
+  const f = await fixture();
+  try {
+    const sent: string[] = [];
+    (
+      f.app.mail as {
+        sendReply?: (...args: [unknown, unknown, string, string]) => unknown;
+      }
+    ).sendReply = async (_agent, _message, text) => {
+      sent.push(text);
+      return "provider-message";
+    };
+    await seedMessages(f.store, "owner", false);
+    const state = f.app.state("owner");
+    const table = state.agents.find((agent) => agent.template === "dining")!;
+    const digest = digestFor(state, table);
+    assert.equal(digest.count, 6);
+    assert.deepEqual(
+      digest.needs.map((need) => need.kind),
+      ["invoice"],
+    );
+    assert.equal(digest.notable.length + digest.aside.length, 5);
+    assert.ok(digest.aside.length >= 1, "the expired offer is set aside");
+    assert.ok(
+      [...digest.notable, ...digest.aside].every(
+        (line) => line.message.kind !== "invoice",
+      ),
+      "the invoice is listed once, under what needs the owner",
+    );
+    const paws = state.agents.find((agent) => agent.template === "pets")!;
+    const blocked = state.messages.find((m) => m.facts.suspicious)!;
+    assert.ok(
+      [
+        ...digestFor(state, paws).notable,
+        ...digestFor(state, paws).aside,
+      ].every((line) => line.message.id !== blocked.id),
+      "a blocked message is never quoted in a digest",
+    );
+    assert.deepEqual(
+      await f.app.ask("owner", "What's new?", "digest", table.id),
+      { type: "digest", engine: "rules" },
+    );
+    const drafted = (await f.app.ask("owner", "Reply", "reply", table.id)) as {
+      type: string;
+      draft: { message_id: string; body: string; to_name: string };
+    };
+    assert.equal(drafted.type, "reply");
+    assert.equal(drafted.draft.to_name, "Marina Table");
+    assert.equal(sent.length, 0, "drafting sends nothing");
+    const id = drafted.draft.message_id;
+    await assert.rejects(
+      f.app.sendReply("owner", id, "Please move Friday to 8 pm.", "r1"),
+      /address before it can reply/,
+    );
+    const agent = f.store.agent("owner", table.id);
+    agent.inbox_id = "table@example.test";
+    agent.email = "table@example.test";
+    f.store.saveAgent(agent);
+    await assert.rejects(
+      f.app.sendReply("owner", id, "Please move Friday to 8 pm.", "r1"),
+      /sample preview/,
+    );
+    const message = f.store.messages("owner").find((m) => m.id === id)!;
+    f.store.saveMessage({
+      ...message,
+      origin: "agentmail",
+      provider_id: "table@example.test:provider-1",
+      from: "Marina Table <hello@marina.example>",
+    });
+    await assert.rejects(
+      f.app.sendReply("owner", id, "   ", "r1"),
+      /up to 4,000 characters/,
+    );
+    await f.app.sendReply("owner", id, "Please move Friday to 8 pm.", "r1");
+    await f.app.sendReply("owner", id, "Please move Friday to 8 pm.", "r1");
+    assert.deepEqual(sent, ["Please move Friday to 8 pm."]);
+    assert.ok(
+      f.app.state("owner").audit.some((event) => event.action === "REPLY_SENT"),
+    );
+    await assert.rejects(
+      f.app.sendReply("owner", blocked.id, "Hello", "r2"),
+      /was blocked/,
+    );
+    assert.equal(f.charges(), 0);
   } finally {
     await f.close();
   }

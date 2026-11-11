@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { Webhook } from "svix";
@@ -47,6 +48,9 @@ const commandSchema = z.object({
     "propose",
     "approve",
     "decline",
+    "pay_invoice",
+    "dismiss_message",
+    "send_reply",
     "rules",
     "pause",
     "revoke",
@@ -60,6 +64,7 @@ const commandSchema = z.object({
     "logout",
   ]),
   text: z.string().max(1500).optional(),
+  body: z.string().max(4000).optional(),
   example: z.string().optional(),
   id: z.string().optional(),
   service_id: z.string().optional(),
@@ -72,6 +77,14 @@ const commandSchema = z.object({
   name: z.string().trim().min(1).max(60).optional(),
   purpose: z.string().trim().min(1).max(1500).optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
+  look: z
+    .object({
+      hair: z.number().int().min(0).max(5),
+      eyes: z.number().int().min(0).max(2),
+      mouth: z.number().int().min(0).max(2),
+      color: z.number().int().min(0).max(3),
+    })
+    .optional(),
   niche: z
     .enum(["all", "entertainment", "groceries", "dining", "pets"])
     .optional(),
@@ -360,6 +373,10 @@ export async function POST(request: NextRequest, context: Context) {
         ...(input.tags ? { tags: input.tags } : {}),
         ...(input.request_id ? { id: input.request_id } : {}),
       });
+      if (input.look) {
+        agent.look = input.look;
+        service.store.saveAgent(agent);
+      }
       return response({ agent: service.store.publicAgent(agent) });
     }
     if (input.action === "connect_agent") {
@@ -381,6 +398,7 @@ export async function POST(request: NextRequest, context: Context) {
       if (input.name) agent.name = input.name;
       if (input.purpose) agent.purpose = input.purpose;
       if (input.tags) agent.tags = input.tags;
+      if (input.look) agent.look = input.look;
       service.store.saveAgent(agent);
       return response({ agent: service.store.publicAgent(agent) });
     }
@@ -477,6 +495,22 @@ export async function POST(request: NextRequest, context: Context) {
         type: "proposal",
         proposal: service.decline(account, id()),
       });
+    if (input.action === "pay_invoice")
+      return response({
+        type: "proposal",
+        proposal: await service.payInvoice(account, id()),
+      });
+    if (input.action === "send_reply")
+      return response(
+        await service.sendReply(
+          account,
+          id(),
+          input.body ?? "",
+          input.request_id ?? randomUUID(),
+        ),
+      );
+    if (input.action === "dismiss_message")
+      return response(service.dismissMessage(account, id()));
     if (input.action === "rules") {
       if (!input.rules)
         throw new MerchantError("INVALID_INPUT", "Enter wallet limits.");

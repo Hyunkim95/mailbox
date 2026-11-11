@@ -1,5 +1,6 @@
 "use client";
 import type { AppState, PublicAgent } from "../src/app-model";
+
 export default function DashboardUnavailable({
   agent,
 }: {
@@ -7,17 +8,12 @@ export default function DashboardUnavailable({
   agent?: PublicAgent;
 }) {
   return (
-    <section className="niche-dashboard" data-testid="dashboard-unavailable">
-      <div className="page-heading">
-        <div>
-          <div className="eyebrow">Your view of your services</div>
-          <h2>{agent ? `${agent.name}’s dashboard` : "Your dashboard"}</h2>
-        </div>
-      </div>
-      <div className="empty-services">
-        <h3>Dashboards aren’t available in this hosted demo.</h3>
+    <section className="ui-col" data-testid="dashboard-unavailable">
+      <div className="ui-empty">
+        <h2>Dashboards are not available in this hosted demo</h2>
         <p>
-          You can still review this agent’s inbox, service wallets and activity.
+          You can still review {agent ? `${agent.name}’s` : "each agent’s"}{" "}
+          inbox, services and activity.
         </p>
       </div>
     </section>

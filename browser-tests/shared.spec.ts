@@ -4,9 +4,7 @@ async function enter(page: Page) {
   await page.goto("/");
   await page.getByLabel("Demo access key").fill(key);
   await page.getByRole("button", { name: "Open Mailbox" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Your agents." }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: /needs? you/ })).toBeVisible();
   await expect(
     page.getByText("Shared demo workspace", { exact: true }),
   ).toBeVisible();
@@ -81,7 +79,7 @@ test("shared demo reset keeps agent identities and history while blocking pendin
   await expect(
     page.getByRole("heading", { name: "House coffee, 250 g", exact: true }),
   ).toBeVisible();
-  await page.getByText("Demo setup", { exact: true }).click();
+  await page.getByRole("button", { name: "Demo", exact: true }).click();
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByRole("button", { name: "Reset workspace", exact: true })

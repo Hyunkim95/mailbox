@@ -1,0 +1,87 @@
+/*
+ * Design tokens. This is the only file that holds raw colour, size and radius
+ * values. Components in app/ui read these; screens compose components.
+ * A theme is this same set of names with different values.
+ */
+:root {
+  /* surfaces */
+  --bg: #fbfbfc;
+  --surface: #ffffff;
+  --hover: #f1f2f5;
+  --active: #ebecf0;
+
+  /* text */
+  --ink: #121417;
+  --ink-2: #4a4f57;
+  --ink-3: #6f757e;
+
+  /* lines */
+  --line: #e9eaee;
+  --line-strong: #d7d9df;
+
+  /* the one accent: reserved for the primary action of a screen */
+  --accent: #ff6a2b;
+  --accent-hover: #ff7d45;
+  --accent-line: #e8581c;
+  --accent-ink: #1a0d05;
+
+  /* solid: selected segments, counts, the brand mark */
+  --solid: #121417;
+  --solid-ink: #ffffff;
+
+  /* status: used for status only */
+  --warn: #7a5a00;
+  --warn-bg: #fbf0c2;
+  --danger: #b3261e;
+  --danger-bg: #fdecea;
+  --ok: #1f6b45;
+  --ok-bg: #e3f3ea;
+
+  /* agent identity: tells agents apart, carries no status */
+  --agent-1-bg: #dcebd9;
+  --agent-1-ink: #234a2c;
+  --agent-2-bg: #d9e6f2;
+  --agent-2-ink: #1f3f5c;
+  --agent-3-bg: #f3e4cf;
+  --agent-3-ink: #6b4310;
+  --agent-4-bg: #e6defa;
+  --agent-4-ink: #47307a;
+
+  /* charts: data marks, never the accent */
+  --chart-1: #3b4250;
+  --chart-2: #aab0bb;
+
+  /* shape */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-full: 999px;
+
+  /* space: multiples of 4 */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+
+  /* type */
+  --font-sans: var(--font-geist), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --text-display: 600 36px/1 var(--font-sans);
+  --text-title: 600 28px/1.15 var(--font-sans);
+  --text-heading: 600 20px/1.25 var(--font-sans);
+  --text-body: 400 14px/1.5 var(--font-sans);
+  --text-small: 400 13px/1.45 var(--font-sans);
+  --text-label: 400 12px/1.4 var(--font-sans);
+
+  /* layout */
+  --sidebar: 216px;
+  --column: 760px;
+  --shadow-raised:
+    0 1px 2px rgb(18 20 23 / 0.04), 0 8px 24px -12px rgb(18 20 23 / 0.12);
+  --focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink);
+}

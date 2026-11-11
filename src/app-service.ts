@@ -10,17 +10,25 @@ import {
 import { AppStore, periodKey } from "./app-store.ts";
 import {
   configured,
+  draftReply,
   interpretAsk,
   modelName,
   modelReady,
   type AskIntent,
 } from "./ai.ts";
-import type { AppState, Proposal, Wallet } from "./app-model.ts";
+import type {
+  AppState,
+  Message,
+  PersonalAgent,
+  Proposal,
+  Wallet,
+} from "./app-model.ts";
 import { merchantTool } from "./service-connector.ts";
 import { PayPal } from "./paypal.ts";
 import {
   deliverOutbox,
   provisionAddress,
+  sendAgentReply,
   syncInbox,
   syncAgentInbox,
 } from "./email.ts";
@@ -29,6 +37,23 @@ import { findCoffeeDeal } from "./coffee-deals.ts";
 import { encryptToken, decryptToken } from "./token-vault.ts";
 import { sampleAgents, defaultAgent } from "./agents.ts";
 import { searchMarket } from "./market.ts";
+
+/** "Daily Paws <offers@example.com>" becomes "Daily Paws". */
+const senderName = (from: Message["from"]) =>
+  from.replace(/\s*<[^>]*>\s*$/, "").trim() || from;
+
+/** The next bookable slot for a service: its weekday, its first time, a table for two. */
+function nextSlot(
+  now: Date,
+  rules: { weekday: number; times: readonly string[] },
+): NonNullable<Proposal["booking"]> {
+  const time = rules.times[0] ?? "19:00";
+  const local = new Date(now.getTime() + 4 * 60 * 60 * 1000);
+  let delta = (rules.weekday - local.getUTCDay() + 7) % 7;
+  if (delta === 0 && local.getUTCHours() >= Number(time.slice(0, 2))) delta = 7;
+  local.setUTCDate(local.getUTCDate() + delta);
+  return { date: local.toISOString().slice(0, 10), time, party_size: 2 };
+}
 
 export class AppService {
   constructor(
@@ -39,8 +64,16 @@ export class AppService {
       deliverOutbox: typeof deliverOutbox;
       syncInbox: typeof syncInbox;
       syncAgentInbox?: typeof syncAgentInbox;
-    } = { provisionAddress, deliverOutbox, syncInbox, syncAgentInbox },
+      sendReply?: typeof sendAgentReply;
+    } = {
+      provisionAddress,
+      deliverOutbox,
+      syncInbox,
+      syncAgentInbox,
+      sendReply: sendAgentReply,
+    },
     readonly interpret = interpretAsk,
+    readonly draft = draftReply,
   ) {}
   state(owner: string): AppState {
     if (
@@ -70,6 +103,7 @@ export class AppService {
         .map((w) => this.store.publicWallet(owner, w)),
       proposals: this.store.proposals(owner),
       messages: this.store.messages(owner),
+      dismissed: this.dismissed(owner),
       audit: this.store.audit(owner),
       configuration: {
         paypal:
@@ -103,6 +137,17 @@ export class AppService {
         "INVALID_ASK",
         "Enter a request up to 1,500 characters.",
       );
+    // The digest is assembled from stored facts, so it never needs a model.
+    if (example === "digest") {
+      this.store.log(
+        owner,
+        "DIGEST_PREPARED",
+        "Messages summarized from their stored facts. No model call.",
+      );
+      return { type: "digest", engine: "rules" };
+    }
+    if (example === "reply" && !modelReady())
+      return this.replyDraft(owner, actingAgent, text, null, "fixture");
     const services = await this.services();
     let intent: AskIntent;
     if (example && !modelReady()) {
@@ -167,6 +212,15 @@ export class AppService {
         ? "Explicit fixture walkthrough; no model call."
         : "Request interpreted with structured model output.",
     );
+    if (intent.intent === "digest") return { type: "digest", engine };
+    if (intent.intent === "reply")
+      return this.replyDraft(
+        owner,
+        actingAgent,
+        intent.query || text,
+        intent.service_id,
+        engine,
+      );
     if (intent.intent === "market_search")
       return {
         ...(await searchMarket(intent.query || text)),
@@ -945,6 +999,207 @@ export class AppService {
       );
     }
     return this.store.proposal(owner, id);
+  }
+  /** Prepares a reply for the owner to edit and approve. Nothing is sent here. */
+  private async replyDraft(
+    owner: string,
+    agent: PersonalAgent | undefined,
+    ask: string,
+    serviceId: string | null,
+    engine: string,
+  ) {
+    const message = this.store
+      .messages(owner)
+      .filter(
+        (candidate) =>
+          !candidate.facts.suspicious &&
+          (!agent || candidate.agent_id === agent.id) &&
+          (!serviceId || candidate.service_id === serviceId),
+      )
+      .sort((a, b) => b.received_at.localeCompare(a.received_at))[0];
+    if (!message)
+      return {
+        type: "answer",
+        answer: "There is no message to reply to yet.",
+        sources: [],
+        engine,
+      };
+    const to = senderName(message.from);
+    const body =
+      engine === "fixture"
+        ? `Hello,\n\nThank you for your message "${message.subject}". Could you confirm the details and let me know if anything changes?\n\nThank you,\nMaya`
+        : await this.draft(ask, {
+            from: message.from,
+            subject: message.subject,
+            text: message.text.slice(0, 4000),
+          });
+    this.store.log(
+      owner,
+      "REPLY_DRAFTED",
+      `A reply to ${to} was drafted for the owner to approve. Nothing was sent.`,
+      message.service_id,
+    );
+    return {
+      type: "reply",
+      draft: {
+        message_id: message.id,
+        service_id: message.service_id,
+        to_name: to,
+        subject: message.subject,
+        body,
+      },
+      engine,
+    };
+  }
+  /** Sends a reply the owner approved, from the agent's own address, once per request. */
+  async sendReply(
+    owner: string,
+    messageId: string,
+    text: string,
+    requestId: string,
+  ) {
+    const message = this.store
+      .messages(owner)
+      .find((candidate) => candidate.id === messageId);
+    if (!message)
+      throw new MerchantError("NOT_FOUND", "That message is no longer here.");
+    const body = text.trim();
+    if (!body || body.length > 4000)
+      throw new MerchantError(
+        "INVALID_REPLY",
+        "Write a reply of up to 4,000 characters.",
+      );
+    if (message.facts.suspicious)
+      throw new MerchantError(
+        "NOT_REPLIABLE",
+        "This message was blocked, so the agent will not reply to it.",
+      );
+    if (!message.agent_id)
+      throw new MerchantError(
+        "NOT_REPLIABLE",
+        "This message does not belong to an agent that can reply.",
+      );
+    const agent = this.store.agent(owner, message.agent_id);
+    const to = senderName(message.from);
+    const key = `reply-sent:${owner}:${requestId}`;
+    const earlier = this.store.setting<{ sent_at: string }>(key);
+    if (earlier) return { sent: true, to_name: to, sent_at: earlier.sent_at };
+    if (!agent.inbox_id)
+      throw new MerchantError(
+        "ADDRESS_REQUIRED",
+        `Create ${agent.name}’s address before it can reply.`,
+      );
+    if (message.origin !== "agentmail" || !message.provider_id)
+      throw new MerchantError(
+        "NOT_REPLIABLE",
+        "This is a sample preview that was never delivered, so there is no sender to reply to.",
+      );
+    if (!this.mail.sendReply)
+      throw new MerchantError(
+        "EMAIL_NOT_CONFIGURED",
+        "Replies are not available in this setup.",
+      );
+    await this.mail.sendReply(agent, message, body, requestId);
+    const sent_at = this.store.now().toISOString();
+    this.store.setSetting(key, { sent_at });
+    this.store.log(
+      owner,
+      "REPLY_SENT",
+      `To ${to}, approved by the owner: "${body.replace(/\s+/g, " ").slice(0, 140)}"`,
+      message.service_id,
+    );
+    return { sent: true, to_name: to, sent_at };
+  }
+  dismissed(owner: string): string[] {
+    return this.store.setting<string[]>(`dismissed:${owner}`) ?? [];
+  }
+  /** Clears a message from the owner's queue. It changes no permission and pays nothing. */
+  dismissMessage(owner: string, messageId: string) {
+    const message = this.store
+      .messages(owner)
+      .find((candidate) => candidate.id === messageId);
+    if (!message)
+      throw new MerchantError("NOT_FOUND", "That message is no longer here.");
+    const dismissed = this.dismissed(owner);
+    if (!dismissed.includes(messageId)) {
+      this.store.setSetting(`dismissed:${owner}`, [...dismissed, messageId]);
+      this.store.log(
+        owner,
+        "MESSAGE_DISMISSED",
+        `"${message.subject}" was dismissed by the owner. No payment was authorized.`,
+        message.service_id,
+      );
+    }
+    return { dismissed: messageId };
+  }
+  /**
+   * Prepares a proposal for an invoice message. The invoice is untrusted mail:
+   * the amount paid is the service's own current quote, and the proposal is
+   * only created when that quote equals the invoice amount.
+   */
+  async payInvoice(owner: string, messageId: string): Promise<Proposal> {
+    const message = this.store
+      .messages(owner)
+      .find((candidate) => candidate.id === messageId);
+    if (!message)
+      throw new MerchantError("NOT_FOUND", "That message is no longer here.");
+    if (
+      message.kind !== "invoice" ||
+      message.facts.suspicious ||
+      !message.facts.amount_minor
+    )
+      throw new MerchantError(
+        "NOT_PAYABLE",
+        "This message is not an invoice with an amount that can be paid.",
+      );
+    const open = this.store
+      .proposals(owner)
+      .find(
+        (proposal) =>
+          proposal.sources.includes(messageId) &&
+          !["DECLINED", "BLOCKED", "EXPIRED"].includes(proposal.status),
+      );
+    if (open) return open;
+    const service = this.service(message.service_id);
+    const amount = message.facts.amount_minor;
+    const item = service.items.find((item) => item.amount_minor === amount);
+    const mismatch = new MerchantError(
+      "INVOICE_MISMATCH",
+      `${service.name} does not currently quote $${(amount / 100).toFixed(2)} for anything. Nothing was prepared.`,
+    );
+    if (!item) throw mismatch;
+    const booking =
+      service.kind === "booking" && service.booking
+        ? nextSlot(this.store.now(), service.booking)
+        : undefined;
+    const quote = await merchantTool<Quote>(service.id, "get_quote", {
+      item_id: item.id,
+      quantity: 1,
+      ...(booking ? { booking } : {}),
+    });
+    if (quote.amount_minor !== amount) throw mismatch;
+    const proposal = await this.propose(
+      owner,
+      service.id,
+      service.kind === "subscription"
+        ? "subscribe"
+        : service.kind === "booking"
+          ? "book"
+          : "buy",
+      {
+        item_id: item.id,
+        quote,
+        sources: [messageId],
+        rationale: booking
+          ? `${message.subject}. The amount matches the service’s current quote. The invoice does not state the reservation, so this holds ${booking.time} on ${booking.date} for ${booking.party_size}.`
+          : `${message.subject}. The amount matches the service’s current quote.`,
+        ...(booking ? { booking } : {}),
+        ...(message.agent_id ? { agent_id: message.agent_id } : {}),
+      },
+    );
+    proposal.title = `Pay ${message.facts.item ?? quote.item_name}`;
+    this.store.saveProposal(proposal);
+    return proposal;
   }
   decline(owner: string, id: string) {
     const p = this.store.proposal(owner, id);
