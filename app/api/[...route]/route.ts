@@ -19,6 +19,7 @@ import {
   syncAgentInbox,
 } from "../../../src/email";
 import { seedMessages } from "../../../src/seed";
+import { replaceMissingAgentAddress } from "../../../src/replace-agent-address";
 import { searchMarket } from "../../../src/market";
 import { studioTurn } from "../../../src/studio-model";
 export const runtime = "nodejs";
@@ -42,6 +43,7 @@ const commandSchema = z.object({
     "market_search",
     "create_agent",
     "connect_agent",
+    "replace_agent_address",
     "update_agent",
     "studio_turn",
     "studio_save",
@@ -64,6 +66,7 @@ const commandSchema = z.object({
     "logout",
   ]),
   text: z.string().max(1500).optional(),
+  expected_address: z.string().email().optional(),
   body: z.string().max(4000).optional(),
   example: z.string().optional(),
   id: z.string().optional(),
@@ -380,6 +383,16 @@ export async function POST(request: NextRequest, context: Context) {
         service.store.saveAgent(agent);
       }
       return response({ agent: service.store.publicAgent(agent) });
+    }
+    if (input.action === "replace_agent_address") {
+      return response({
+        agent: await replaceMissingAgentAddress(
+          service.store,
+          account,
+          z.string().uuid().parse(input.agent_id),
+          z.string().email().parse(input.expected_address),
+        ),
+      });
     }
     if (input.action === "connect_agent") {
       const agent = service.store.agent(
