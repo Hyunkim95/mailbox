@@ -8,7 +8,7 @@ The owner reviews financial permission. PayPal handles saved-payment consent and
 
 Hosted demo: https://mailbox-hackathon.onrender.com
 
-Use the dedicated access key supplied privately in the Devpost testing instructions. This opens a shared judging workspace. The public host is being updated to the current Pigeon build; deployment acceptance is recorded in DEPLOYMENT.md.
+Use the dedicated access key supplied privately in the Devpost testing instructions. This opens a shared judging workspace. The public Pigeon build has passed dedicated-key sign-in, receipt matching, original merchant-status checks, Channel3 discovery and dashboard loading. See DEPLOYMENT.md.
 
 Shopping uses its own genuine AgentMail address. Its USD 6.50 coffee purchase and one automatically scheduled USD 29.99 refill completed through PayPal's sandbox, and their original emailed invoices were received and matched. Reel retains its original USD 7.99 paid month, renewal-disabled status and receipt. Historical transactions remain under their original identities.
 
@@ -55,7 +55,7 @@ npm run test:browser
 npm run format:check
 ```
 
-Latest completed local acceptance: 96 core checks and 31 browser scenarios. Core and browser tests use isolated provider transports; connected acceptance separately verified genuine provider outcomes. No test result alone is presented as a payment or email-delivery result.
+Latest completed local acceptance: 96 core checks and 32 browser scenarios. Core and browser tests use isolated provider transports; connected acceptance separately verified genuine provider outcomes. No test result alone is presented as a payment or email-delivery result.
 
 ## Submission
 

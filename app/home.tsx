@@ -205,7 +205,7 @@ export function Home({
       </SectionHead>
       <div className="ui-rows">
         {visibleAgents.map((agent) => {
-          const index = agents.indexOf(agent);
+          const index = state.agents.indexOf(agent);
           const count = state.messages.filter(
             (m) => m.agent_id === agent.id,
           ).length;

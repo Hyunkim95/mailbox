@@ -48,6 +48,30 @@ async function seed(page: Page) {
   ).toBeVisible();
 }
 
+test("archived agents do not change another agent's avatar between home and sidebar", async ({
+  page,
+}) => {
+  await login(page);
+  const state = await (await page.request.get("/api/state")).json();
+  state.agents[0].archived_at = new Date().toISOString();
+  state.agents[0].status = "paused";
+  const visible = state.agents[1];
+  await page.route("**/api/state", (route) => route.fulfill({ json: state }));
+  await page.goto("/");
+  const sidebar = page
+    .getByRole("button", { name: `Open ${visible.name}`, exact: true })
+    .locator(".ui-avatar");
+  const row = page
+    .locator(".ui-row.is-agent")
+    .filter({ hasText: visible.name })
+    .locator(".ui-avatar");
+  await expect(sidebar).toBeVisible();
+  await expect(row).toBeVisible();
+  expect(await row.getAttribute("class")).toBe(
+    await sidebar.getAttribute("class"),
+  );
+});
+
 test("a second agent can review the same shop using a fresh isolated connection", async ({
   page,
 }) => {

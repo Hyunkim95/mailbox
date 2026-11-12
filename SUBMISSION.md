@@ -40,4 +40,4 @@ No further charge is required for judging. The shared workspace's financial cont
 
 ## Release status
 
-The working connected outcomes are verified locally. Current local checks: 96 core tests and 31 browser scenarios. Publication, hosted acceptance and the final YouTube link are being completed. No final Devpost entry has been submitted.
+The Pigeon source is public and the hosted build has passed dedicated-key sign-in, both native receipt matches, original Reel status, live Channel3 discovery and dashboard loading. Current checks: 96 core tests and 32 browser scenarios. The final narrated video and public YouTube link remain in progress. No final Devpost entry has been submitted.
