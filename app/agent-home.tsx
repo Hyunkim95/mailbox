@@ -55,7 +55,7 @@ export function AgentHeader({
               </LinkButton>
             </>
           )}
-          <LinkButton disabled={busy} onClick={onEdit}>
+          <LinkButton disabled={busy || !!agent.archived_at} onClick={onEdit}>
             Edit
           </LinkButton>
         </div>

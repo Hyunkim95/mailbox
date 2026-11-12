@@ -2,11 +2,11 @@ import { test, expect, type Page } from "@playwright/test";
 const key = "mailbox-browser-test-access";
 async function enter(page: Page) {
   await page.goto("/");
-  await page.getByLabel("Demo access key").fill(key);
-  await page.getByRole("button", { name: "Open Mailbox" }).click();
+  await page.getByLabel("Access key").fill(key);
+  await page.getByRole("button", { name: "Open Pigeon" }).click();
   await expect(page.getByRole("heading", { name: /needs? you/ })).toBeVisible();
   await expect(
-    page.getByText("Shared demo workspace", { exact: true }),
+    page.getByText("Shared workspace", { exact: true }),
   ).toBeVisible();
 }
 
@@ -26,7 +26,7 @@ test("the dedicated demo key reopens the same agents across sign-out and browser
   });
   expect(edited.ok()).toBe(true);
   await page.getByTitle("Sign out", { exact: true }).click();
-  await expect(page.getByLabel("Demo access key")).toBeVisible();
+  await expect(page.getByLabel("Access key")).toBeVisible();
   expect((await page.request.get("/api/state")).status()).toBe(401);
   await enter(page);
   const reopened = await (await page.request.get("/api/state")).json();
@@ -42,8 +42,8 @@ test("the dedicated demo key reopens the same agents across sign-out and browser
   try {
     const other = await otherContext.newPage();
     await other.goto("/");
-    await other.getByLabel("Demo access key").fill("incorrect-access-key");
-    await other.getByRole("button", { name: "Open Mailbox" }).click();
+    await other.getByLabel("Access key").fill("incorrect-access-key");
+    await other.getByRole("button", { name: "Open Pigeon" }).click();
     await expect(
       other.getByRole("alert").filter({ hasText: "not accepted" }),
     ).toBeVisible();
@@ -74,20 +74,33 @@ test("shared demo reset keeps agent identities and history while blocking pendin
   await enter(page);
   const original = await (await page.request.get("/api/state")).json();
   await page.getByRole("button", { name: "Open Pantry", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Find a coffee deal", exact: true })
-    .click();
+  const pantry = original.agents.find(
+    (a: { name: string }) => a.name === "Pantry",
+  );
+  const prepared = await page.request.post("/api/command", {
+    data: {
+      action: "propose",
+      service_id: "basil-market",
+      kind: "buy",
+      agent_id: pantry.id,
+    },
+  });
+  expect(prepared.ok()).toBe(true);
+  await page.reload();
+  await page.getByRole("button", { name: "Open Pantry", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "House coffee, 250 g", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Demo", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Workspace menu", exact: true })
+    .click();
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByRole("button", { name: "Reset workspace", exact: true })
     .click();
   await expect(
     page.getByText(
-      "Demo reset. Spending is paused; agent addresses, messages and payment history are kept.",
+      "Workspace reset. Spending is paused; agent addresses, messages and payment history are kept.",
       { exact: true },
     ),
   ).toBeVisible();

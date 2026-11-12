@@ -10,6 +10,7 @@ import {
   senderName,
   shortDate,
   walletBelongs,
+  readyAgentIds,
 } from "./agent-scope";
 import { Badge, Button, LinkButton, SectionHead } from "./ui";
 import { Avatar, lookFor } from "./ui/avatar";
@@ -35,7 +36,11 @@ export function Home({
   onCreate: () => void;
   onLoadDemo: () => void;
 }) {
-  const agents = state.agents ?? [];
+  const agents = (state.agents ?? []).filter((a) => !a.archived_at);
+  const ready = readyAgentIds(state);
+  const visibleAgents = ready.size
+    ? agents.filter((a) => ready.has(a.id))
+    : agents;
   if (!agents.length)
     return (
       <div className="ui-col">
@@ -199,7 +204,8 @@ export function Home({
         <LinkButton onClick={onCreate}>New agent</LinkButton>
       </SectionHead>
       <div className="ui-rows">
-        {agents.map((agent, index) => {
+        {visibleAgents.map((agent) => {
+          const index = agents.indexOf(agent);
           const count = state.messages.filter(
             (m) => m.agent_id === agent.id,
           ).length;

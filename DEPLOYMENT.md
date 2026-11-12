@@ -1,32 +1,36 @@
-# Hosted demo
+# Pigeon hosted demo
 
-The repository includes a [Render Blueprint](render.yaml) for one Node service with a 1 GB persistent disk. It is prepared configuration, not a deployed service. Creating it provisions paid compute and storage. The configured 512 MB service is $7/month and the 1 GB disk is $0.25/month, before taxes and usage overages. [Current Render pricing](https://render.com/pricing). The hackathon offers [$50 of Render credits](https://credits-portal-mmdm.onrender.com/claim/paypal-ai-hackathon); claim them for the intended workspace and follow [Render redemption instructions](https://render.com/docs/credits). The disk keeps both SQLite databases across restarts; do not scale the service to multiple instances. [Render disk constraints](https://render.com/docs/disks).
+Service: https://mailbox-hackathon.onrender.com
+Render service: srv-dbq7b70m7kps73ab3580
+Repository: https://github.com/Hyunkim95/mailbox
 
-Render billing is now configured: the current Blueprint validation passes for one service. The owner authorized this core deployment at about $7.25/month, with AG Studio available locally and disabled on the host. A successful validation is not proof of deployment.
+The owner authorized publishing the latest code, deploying it to this existing service and verifying judge access. Do not create another service, increase capacity or alter the three-inbox cap.
 
-1. Publish the reviewed source to its public MIT-licensed repository, then create a Blueprint from that repository. Keep automatic deployments off during recording and judging.
-2. Fill the service credentials requested by the Blueprint. Select `AI_PROVIDER=openai` or `anthropic`, then add the matching `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the service environment. Only the chosen model provider needs a key. Also add `CHANNEL3_API_KEY`. The approved core deployment uses `MAILBOX_ENABLE_AG_STUDIO=false`, excluding AG Studio from the hosted build while preserving it locally. Add a valid `NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY`, enable the flag and rebuild only when hosted dashboards are licensed. Set `APP_URL` to the service's actual HTTPS origin, with no trailing path. Leave `MOCK_MERCHANT_URL` unset so MCP calls use the same server's loopback port. Do not copy the local `.env` wholesale.
-3. Set `DEMO_WORKSPACE_ID` to the selected existing Maya workspace and restore its app and merchant databases onto the persistent disk before giving out hosted access. Setting an owner ID without its data creates fresh agents and does not preserve Reel or Pantry’s inbox binding. Use consistent private SQLite backups and Render’s [supported SSH access](https://render.com/docs/ssh); never replace a live database file while the process has it open. Retain `APP_SESSION_SECRET` when migrating encrypted payment tokens. Verify the exact agent IDs and addresses after restore and restart. The demo key opens this shared workspace for every holder. Keep the four private secrets stable. Changing `APP_SESSION_SECRET` makes existing encrypted payment tokens unreadable. Get the hosted `DEMO_ACCESS_KEY` from Render's environment settings and provide it in the judges' testing instructions.
-4. In the sandbox PayPal application's webhook settings, register `https://<actual-host>/webhooks/paypal` for `PAYMENT.CAPTURE.COMPLETED`. Save its ID as `PAYPAL_WEBHOOK_ID` on the service. This is a sandbox app and a matching sandbox merchant account, never live credentials.
-5. Create an AgentMail webhook for the owned inboxes at `https://<actual-host>/api/webhooks/agentmail`, subscribing to `message.received`. Save its signing secret as `AGENTMAIL_WEBHOOK_SECRET`. The approved demonstration keeps Reel and Pantry live, plus the merchant sender, within the account’s three-inbox limit. Table and Paws keep labeled previews. Do not provision more agent inboxes, delete existing inboxes or reassign services to bypass the limit. Sample sending uses existing connected agents only. Labeled previews remain visible until actual receipt replaces each one.
-6. Deploy and open the hosted URL. Check both database paths are under `/var/data/mailbox`, sign in, and complete the live acceptance steps below. Restart once and confirm the service, ledger and cancellation still exist.
+## Configuration
 
-Blueprint secrets are prompted on initial creation; later secret changes must be added to the service directly. Generated values are retained when already present. [Render Blueprint reference](https://render.com/docs/blueprint-spec).
+The service runs one Node instance with its existing persistent disk. Both SQLite database paths remain under /var/data/mailbox. Keep the existing APP_SESSION_SECRET, access key and merchant credentials stable. Automatic deployments remain off; deploy an exact reviewed commit.
 
-## Live acceptance before recording
+Build: npm ci --include=dev && npm run build
+Start: npm start -- --hostname 0.0.0.0
 
-Use only the owned sandbox accounts and invented merchant data. Record actual provider references privately; do not commit tokens or mailbox credentials.
+APP_URL is the public HTTPS origin. MCP calls use the same service. The selected model provider, AgentMail, PayPal sandbox and Channel3 must be configured. The normal worker runs every 15 seconds. The PayPal capture webhook and AgentMail received-message webhook remain on their existing public routes.
 
-- Use **Demo setup → Send samples to connected agents**. Confirm 12 received samples across Reel and Pantry and 12 labeled previews across Table and Paws. No extra agent inboxes should be created, and no preview can stand in for received mail.
-- Submit a typed film request. Confirm model-backed interpretation, the three service options and their MCP quotes. Choose one month, save the wallet permission, approve PayPal's sandbox consent, and follow its return.
-- Verify the completed capture in PayPal, the independent merchant activation, exactly one wallet debit, actual confirmation email, and the paid period's cancellation date. Measure approval return to the complete service/email state; the target is 15 seconds, not an achieved claim.
-- Reload and retry synchronization. Confirm no second capture. Pause and disconnect a service, then check that a new action cannot spend. Reconnection must require fresh permission.
-- Compare coffee pack prices and source email, purchase the selected variant, and verify its real capture and receipt. Show Table’s fixture-backed Friday availability and deposit proposal, explicitly labeled as a walkthrough. No live booking or received confirmation is claimed for that preview agent.
-- Show Paws’s exact dog-food rule below $30 as a fixture walkthrough. Existing integration tests prove strict threshold, variant binding and one-shot behavior; do not claim live execution or provider delivery for this preview agent.
-- Confirm the upsell does not change authority or spend. Reset, verify authority is disabled while the shared agent addresses, messages and historical PayPal payments remain, then replay without reusing a completed payment identity as a new charge.
+## State migration
 
-## Judging handoff
+Preserve the original hosted workspace and paid Reel records. Back up both hosted databases before importing the connected Shopping workspace. Keep original actor IDs, addresses, capture IDs, invoices, approved limits and expiry dates. Never present retired Dev payments as new Shopping purchases.
 
-Provide the actual URL, a dedicated demo login and sandbox buyer instructions through the submission's testing fields. Keep API secrets out of the public repository. Leave the demo available through 15 December 2026, including the background worker and receiving webhooks. The [official rules](https://paypalaihackathon.devpost.com/rules) allow setup instructions or hosting, require public licensed source and a public YouTube demonstration under three minutes, and require a functioning build matching the claims.
+Direct SSH maintenance access is being checked. If unavailable, use Render's private secret files for a one-time startup import before the web server and worker start. No public restore endpoint is needed. Remove private transfer files and temporary startup configuration after verifying the import.
 
-When updating environment variables through the Render API, retrieve every page before replacing the collection with PUT. Confirm the complete set afterward, including AgentMail, the selected model provider and Channel3. A partial listing must never be used as the replacement configuration.
+Keep the hosted encryption key unchanged. Any imported token must remain bound to its original agent and wallet; no new spending permission or allowance is granted by deployment. Shopping's authorized USD 36.49 is fully spent, with no reserved or available funds.
+
+## Acceptance
+
+Before submission, verify the public Pigeon title and sign-in, the dedicated judge key, the exact Shopping and Reel identities, both new Shopping captures and original invoices, merchant receipt matching, a read-only native request, Channel3 discovery, dashboard availability and persistence after restart. Confirm the complete environment configuration and remove all transfer files.
+
+Deployment and public judge-access verification are in progress. Update this section with the deployed commit and completed checks after acceptance.
+
+## Judge access
+
+Supply the dedicated access key privately through Devpost's testing field, not the public repository. Explain that this is shared demo data. Judges need not make another payment: existing genuine sandbox outcomes, receipts and budgets are available for inspection.
+
+Keep the app and necessary provider access available through 15 December 2026. Setup instructions are a fallback if hosting is unavailable. The official requirements are at https://paypalaihackathon.devpost.com/rules.

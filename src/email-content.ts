@@ -67,3 +67,15 @@ export function nativePromotionFacts(subject: string, text: string) {
     date_hint: /\b\d{1,2}\.\d{1,2}\b/.exec(subject)?.[0] ?? null,
   };
 }
+/** Require one explicitly written ISO currency; a bare dollar sign is ambiguous. */
+export function explicitCurrency(text: string): string | null {
+  const supported = new Set(Intl.supportedValuesOf("currency"));
+  const codes = new Set<string>();
+  const pattern =
+    /\b([A-Z]{3})\s*(?=\d|[$€£¥])|\d[\d,.]*\s+([A-Z]{3})\b|["']currency(?:_code)?["']\s*:\s*["']([A-Z]{3})["']/g;
+  for (const match of text.matchAll(pattern)) {
+    const code = match[1] ?? match[2] ?? match[3];
+    if (code && supported.has(code)) codes.add(code);
+  }
+  return codes.size === 1 ? [...codes][0]! : null;
+}

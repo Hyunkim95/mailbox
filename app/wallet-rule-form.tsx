@@ -2,6 +2,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import type { PublicWallet } from "../src/app-model";
 import { Button, LinkButton, Segmented } from "./ui";
+import { money } from "./agent-scope";
 
 const modes: { id: PublicWallet["mode"]; label: string }[] = [
   { id: "draft", label: "Draft only" },
@@ -38,8 +39,12 @@ export function WalletRuleForm({
   onSave,
   onDecline,
   requirePayment = false,
+  requireAutomatic = false,
+  minimumAutomatic = 0,
   errorMessage,
   context,
+  blockedReason,
+  reviewAmount,
 }: {
   wallet: PublicWallet;
   busy: boolean;
@@ -47,9 +52,14 @@ export function WalletRuleForm({
   onSave: (rules: WalletRulesPayload) => void;
   onDecline?: () => void;
   requirePayment?: boolean;
+  requireAutomatic?: boolean;
+  minimumAutomatic?: number;
   errorMessage?: string;
   /** Shown beside the approve button: what this approval pays from. */
   context?: ReactNode;
+  blockedReason?: string;
+  /** Exact ordinary payment being reviewed; rules themselves do not charge. */
+  reviewAmount?: number;
 }) {
   // An approval can never go through as "draft", so it starts on "ask":
   // the approve button works at once and the owner is still asked each time.
@@ -68,8 +78,25 @@ export function WalletRuleForm({
       wallet.pending_reset?.timezone ?? wallet.timezone,
     ),
     [expiry, setExpiry] = useState(dubaiDate(wallet.expires_at));
+  const actionLimit = Math.round(Number(perAction) * 100);
+  const available = Math.max(
+    0,
+    Math.round(Number(cap) * 100) - wallet.spent - wallet.reserved,
+  );
+  const paymentLimitBlock =
+    reviewAmount !== undefined
+      ? !Number.isSafeInteger(actionLimit) || !Number.isSafeInteger(available)
+        ? "Enter valid payment limits before approving."
+        : reviewAmount > actionLimit
+          ? `This payment is ${money(reviewAmount)}; the per-action limit is ${money(actionLimit)}. Edit limits to review a higher limit.`
+          : reviewAmount > available
+            ? `This payment is ${money(reviewAmount)}; this service wallet has ${money(available)} available. Edit limits to review a higher budget.`
+            : undefined
+      : undefined;
+  const approvalBlock = blockedReason ?? paymentLimitBlock;
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (approvalBlock) return;
     onSave({
       revision: wallet.revision,
       cap: Math.round(Number(cap) * 100),
@@ -181,7 +208,14 @@ export function WalletRuleForm({
             type="submit"
             variant="primary"
             busy={busy}
-            disabled={busy || mode === "draft"}
+            disabled={
+              busy ||
+              mode === "draft" ||
+              !!approvalBlock ||
+              (requireAutomatic &&
+                (mode !== "auto" ||
+                  Math.round(Number(auto) * 100) < minimumAutomatic))
+            }
           >
             {buttonLabel}
           </Button>
@@ -190,18 +224,26 @@ export function WalletRuleForm({
           <p className="ui-card-ctx">
             Payment permission
             <small>
-              {mode === "draft"
-                ? "Draft only cannot pay. Choose another permission to approve."
-                : mode === "ask"
-                  ? "You approve every payment to this service."
-                  : "Pays without asking, inside the limits you set."}
+              {requireAutomatic && mode !== "auto"
+                ? "Monthly purchases require your explicit automatic permission. Select it and review the limits."
+                : requireAutomatic &&
+                    Math.round(Number(auto) * 100) < minimumAutomatic
+                  ? "Set a positive automatic limit for the monthly purchases."
+                  : mode === "draft"
+                    ? "Draft only cannot pay. Choose another permission to approve."
+                    : mode === "ask"
+                      ? "You approve every payment to this service."
+                      : "Pays without asking, inside the limits you set."}
             </small>
           </p>
           <Segmented
             label="Payment permission"
             options={modes}
             value={mode}
-            onChange={setMode}
+            onChange={(value) => {
+              setMode(value);
+              if (requireAutomatic && value === "auto") setShowLimits(true);
+            }}
             disabled={busy}
           />
           <LinkButton
@@ -211,6 +253,11 @@ export function WalletRuleForm({
             {showLimits ? "Hide limits" : "Edit limits"}
           </LinkButton>
           {showLimits && <div className="ui-fields">{fields}</div>}
+          {paymentLimitBlock && !blockedReason && (
+            <p className="ui-note is-danger" role="alert">
+              {paymentLimitBlock}
+            </p>
+          )}
           {showLimits && wallet.spent + wallet.reserved > 0 && (
             <p className="ui-note">
               Reset schedule changes start at the next existing budget boundary.

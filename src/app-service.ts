@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { replyAddresses } from "./reply-routing.ts";
 import { isSharedDemoOwner } from "./auth.ts";
 import {
   MerchantError,
@@ -8,20 +9,13 @@ import {
   type Service,
 } from "@mailbox/service-sdk";
 import { AppStore, periodKey } from "./app-store.ts";
-import {
-  configured,
-  draftReply,
-  interpretAsk,
-  modelName,
-  modelReady,
-  type AskIntent,
-} from "./ai.ts";
+import { configured, modelName, modelReady } from "./ai.ts";
 import type {
   AppState,
   Message,
-  PersonalAgent,
   Proposal,
   Wallet,
+  PreparedReply,
 } from "./app-model.ts";
 import { merchantTool } from "./service-connector.ts";
 import { PayPal } from "./paypal.ts";
@@ -33,10 +27,26 @@ import {
   syncAgentInbox,
 } from "./email.ts";
 import { catalogue } from "./catalogue.ts";
-import { findCoffeeDeal } from "./coffee-deals.ts";
 import { encryptToken, decryptToken } from "./token-vault.ts";
 import { sampleAgents, defaultAgent } from "./agents.ts";
-import { searchMarket } from "./market.ts";
+import { runAgent } from "./agent-run.ts";
+import { nextAgentTurn, type AgentTurn } from "./agent-model.ts";
+import {
+  cancellationReviews,
+  confirmCancellationReview,
+  discardCancellationReview,
+  cancellationReview,
+} from "./cancellation-review.ts";
+import {
+  makeMonthlySchedule,
+  monthlyDue,
+  monthlyPeriodHasPurchase,
+  nextMonthlyDue,
+  scheduledPurchaseId,
+  validateScheduledQuote,
+  assertScheduledDispatch,
+  type MonthlyPurchaseInput,
+} from "./purchase-schedules.ts";
 
 /** "Daily Paws <offers@example.com>" becomes "Daily Paws". */
 const senderName = (from: Message["from"]) =>
@@ -72,8 +82,7 @@ export class AppService {
       syncAgentInbox,
       sendReply: sendAgentReply,
     },
-    readonly interpret = interpretAsk,
-    readonly draft = draftReply,
+    readonly turn: AgentTurn = nextAgentTurn,
   ) {}
   state(owner: string): AppState {
     if (
@@ -93,7 +102,26 @@ export class AppService {
         }
       }
     }
+    const proposals = this.store.proposals(owner);
     return {
+      now: this.store.now().toISOString(),
+      agent_allowances: this.store.agents(owner).flatMap((a) => {
+        const rule = this.store.agentAllowance(owner, a.id);
+        return rule ? [rule] : [];
+      }),
+      cancellation_reviews: cancellationReviews(this.store, owner).map(
+        ({ owner: _owner, ...r }) => r,
+      ),
+      reply_drafts: this.store.agents(owner).flatMap((a) => {
+        const draft = this.store.setting<PreparedReply>(
+          `agent-reply:${owner}:${a.id}`,
+        );
+        return draft ? [{ agent_id: a.id, draft }] : [];
+      }),
+      tasks: this.store.tasks(owner),
+      documents: this.store
+        .documents(owner)
+        .map(({ text: _text, ...doc }) => doc),
       shared_demo: isSharedDemoOwner(owner),
       agents: this.store
         .agents(owner)
@@ -101,7 +129,38 @@ export class AppService {
       wallets: this.store
         .wallets(owner)
         .map((w) => this.store.publicWallet(owner, w)),
-      proposals: this.store.proposals(owner),
+      proposals: proposals.map((p) => {
+        if (p.kind !== "schedule" || !p.monthly_schedule) return p;
+        const latest = proposals.find(
+          (c) => c.scheduled_by?.proposal_id === p.id,
+        );
+        const due = monthlyDue(p.monthly_schedule, this.store.now());
+        const attempted =
+          monthlyPeriodHasPurchase(this.store, owner, p, this.store.now()) ||
+          proposals.some(
+            (c) =>
+              c.scheduled_by?.proposal_id === p.id &&
+              c.scheduled_by.period === due.period &&
+              c.status === "DECLINED",
+          );
+        return {
+          ...p,
+          next_scheduled_at: ["DECLINED", "EXPIRED"].includes(p.status)
+            ? null
+            : nextMonthlyDue(p.monthly_schedule, this.store.now(), attempted),
+          ...(latest
+            ? {
+                latest_scheduled_purchase: {
+                  id: latest.id,
+                  status: latest.status,
+                  amount: latest.amount,
+                  period: latest.scheduled_by!.period,
+                  capture_id: latest.capture_id,
+                },
+              }
+            : {}),
+        };
+      }),
       messages: this.store.messages(owner),
       dismissed: this.dismissed(owner),
       audit: this.store.audit(owner),
@@ -111,6 +170,7 @@ export class AppService {
           configured("PAYPAL_CLIENT_SECRET") &&
           configured("PAYPAL_MERCHANT_ID"),
         email: configured("AGENTMAIL_API_KEY"),
+        email_preview: process.env.MAILBOX_MAIL_PREVIEW === "1",
         model: modelReady(),
         merchant: configured("MOCK_MERCHANT_TOKEN"),
       },
@@ -121,8 +181,8 @@ export class AppService {
   async services(query = "") {
     return merchantTool<Service[]>(null, "search_catalogue", { query });
   }
-  private service(id: string) {
-    const service = catalogue.services.find((s) => s.id === id);
+  private async service(id: string) {
+    const service = (await this.services()).find((s) => s.id === id);
     if (!service)
       throw new MerchantError(
         "UNSUPPORTED_SERVICE",
@@ -130,277 +190,81 @@ export class AppService {
       );
     return service;
   }
-  async ask(owner: string, text: string, example?: string, agentId?: string) {
-    const actingAgent = agentId ? this.store.agent(owner, agentId) : undefined;
+  async ask(owner: string, text: string, agentId?: string) {
     if (text.length < 1 || text.length > 1500)
       throw new MerchantError(
         "INVALID_ASK",
         "Enter a request up to 1,500 characters.",
       );
-    // The digest is assembled from stored facts, so it never needs a model.
-    if (example === "digest") {
-      this.store.log(
-        owner,
-        "DIGEST_PREPARED",
-        "Messages summarized from their stored facts. No model call.",
-      );
-      return { type: "digest", engine: "rules" };
-    }
-    if (example === "reply" && !modelReady())
-      return this.replyDraft(owner, actingAgent, text, null, "fixture");
-    const services = await this.services();
-    let intent: AskIntent;
-    if (example && !modelReady()) {
-      const today = this.store.now();
-      const local = new Date(today.getTime() + 4 * 60 * 60 * 1000);
-      const weekday = local.getUTCDay();
-      let delta = (5 - weekday + 7) % 7;
-      if (delta === 0 && local.getUTCHours() >= 19) delta = 7;
-      local.setUTCDate(local.getUTCDate() + delta);
-      const date = local.toISOString().slice(0, 10);
-      const known: Record<string, AskIntent["intent"]> = {
-        film: "film",
-        coffee: "coffee",
-        dining: "booking",
-        pets: "pets_condition",
-      };
-      const kind = known[example];
-      if (!kind)
-        throw new MerchantError(
-          "MODEL_NOT_CONFIGURED",
-          "Use a displayed fixture example or add the model key.",
-        );
-      intent = {
-        intent: kind,
-        query: kind === "film" ? "The Lantern Coast" : text,
-        film_title: kind === "film" ? "The Lantern Coast" : null,
-        service_id: null,
-        answer: null,
-        date: kind === "booking" ? date : null,
-        time: kind === "booking" ? "19:00" : null,
-        party_size: kind === "booking" ? 2 : null,
-        quantity: 1,
-        under_minor: kind === "pets_condition" ? 3000 : null,
-      };
-    } else
-      intent = await this.interpret(text, {
-        agent: actingAgent ? this.store.publicAgent(actingAgent) : null,
-        date: this.store.now().toISOString(),
-        timezone: "Asia/Dubai",
-        services,
-        wallets: this.state(owner).wallets.filter(
-          (wallet) => !actingAgent || wallet.agent_id === actingAgent.id,
-        ),
-        messages: this.store
-          .messages(owner)
-          .filter(
-            (message) => !actingAgent || message.agent_id === actingAgent.id,
+    // Suggestions are ordinary requests. Only the model composes capabilities.
+    if (agentId)
+      this.store.transaction(() => {
+        this.store.agent(owner, agentId);
+        for (const p of this.store.proposals(owner)) {
+          if (
+            (p.agent_id ?? this.store.wallet(owner, p.wallet_id).agent_id) !==
+              agentId ||
+            !["NEEDS_APPROVAL", "APPROVED"].includes(p.status) ||
+            ["condition", "schedule"].includes(p.kind) ||
+            p.reserved ||
+            p.dispatched_at ||
+            p.merchant_action_id ||
+            p.paypal_order_id ||
+            p.capture_id
           )
-          .slice(0, 30)
-          .map((m) => ({
-            id: m.id,
-            service_id: m.service_id,
-            subject: m.subject,
-            facts: m.facts,
-          })),
+            continue;
+          if (
+            !p.quote_expires ||
+            !(new Date(p.quote_expires) > this.store.now())
+          ) {
+            p.status = "EXPIRED";
+            p.reason = "The quote expired before payment. Get a fresh review.";
+            this.store.saveProposal(p);
+            this.store.log(
+              owner,
+              "QUOTE_EXPIRED",
+              p.reason,
+              p.service_id,
+              null,
+              agentId,
+            );
+          }
+        }
       });
-    const engine = example && !modelReady() ? "fixture" : "model";
-    this.store.log(
+    if (agentId && this.mail.syncAgentInbox) {
+      const agent = this.store.agent(owner, agentId);
+      if (agent.inbox_id) {
+        try {
+          await this.mail.syncAgentInbox(this.store, agent);
+        } catch {
+          this.store.log(
+            owner,
+            "INBOX_SYNC_FAILED",
+            "Could not refresh this agent's inbox. Stored evidence remains available; unverified reply routing cannot be sent.",
+            null,
+            null,
+            agent.id,
+          );
+        }
+      }
+    }
+    return runAgent({
       owner,
-      "REQUEST_INTERPRETED",
-      engine === "fixture"
-        ? "Explicit fixture walkthrough; no model call."
-        : "Request interpreted with structured model output.",
-    );
-    if (intent.intent === "digest") return { type: "digest", engine };
-    if (intent.intent === "reply")
-      return this.replyDraft(
-        owner,
-        actingAgent,
-        intent.query || text,
-        intent.service_id,
-        engine,
-      );
-    if (intent.intent === "market_search")
-      return {
-        ...(await searchMarket(intent.query || text)),
-        ...(actingAgent ? { agent_id: actingAgent.id } : {}),
-      };
-    if (intent.intent === "film") {
-      const title = intent.film_title?.trim();
-      if (!title)
-        return {
-          type: "answer",
-          answer: "Which film would you like to watch?",
-          sources: [],
-          engine,
-        };
-      const normalize = (value: string) =>
-        value
-          .normalize("NFKC")
-          .toLowerCase()
-          .replace(/[^\p{L}\p{N}]+/gu, " ")
-          .trim();
-      const requested = normalize(title);
-      const matches = services
-        .map((service) => ({
-          ...service,
-          items: service.items.filter((item) =>
-            item.includes.some((film) => normalize(film) === requested),
-          ),
-        }))
-        .filter((service) => service.items.length > 0);
-      if (!matches.length)
-        return {
-          type: "answer",
-          answer:
-            "No supported fixture service lists that film. I have not assumed it is available or prepared a payment.",
-          sources: [],
-          engine,
-        };
-      const already = this.store
-        .proposals(owner)
-        .find(
-          (p) =>
-            p.status === "PAID" &&
-            (!p.cancel_effective_at ||
-              new Date(p.cancel_effective_at) > this.store.now()) &&
-            this.store.wallet(owner, p.wallet_id).status !== "canceled" &&
-            matches.some((s) => s.id === p.service_id) &&
-            (!p.period_end || new Date(p.period_end) > this.store.now()),
-        );
-      if (already)
-        return {
-          type: "answer",
-          answer:
-            "You already have access through this service. No additional payment is needed.",
-          service_id: already.service_id,
-          sources: this.store
-            .messages(owner, already.service_id)
-            .filter((m) => m.facts.action_id === already.merchant_action_id)
-            .map((m) => m.id),
-          engine,
-        };
-      return {
-        type: "options",
-        title: `${matches.length === 3 ? "Three" : matches.length} ways to watch ${matches[0]?.items[0]?.includes[0] ?? intent.query}`,
-        options: matches.map((s) => ({
-          id: s.id,
-          name: s.name,
-          kind: s.kind,
-          amount: s.items[0]!.amount_minor,
-          item_id: s.items[0]!.id,
-          terms: s.items[0]!.terms,
-          category: s.category,
-        })),
-        engine,
-      };
-    }
-    if (intent.intent === "coffee") {
-      const deal = await findCoffeeDeal({
-        services,
-        messages: this.store
-          .messages(owner)
-          .filter(
-            (message) => !actingAgent || message.agent_id === actingAgent.id,
-          ),
-        now: this.store.now(),
-        quantity: intent.quantity ?? 1,
-        maxAmount: intent.under_minor,
-        budgetFor: (serviceId) => {
-          const wallet = this.store
-            .wallets(owner)
-            .find((w) => w.service_id === serviceId);
-          return wallet
-            ? Math.min(
-                this.store.publicWallet(owner, wallet).available,
-                wallet.per_action,
-              )
-            : 15000;
-        },
-      });
-      return {
-        type: "proposal",
-        proposal: await this.propose(owner, deal.serviceId, "buy", {
-          ...(agentId ? { agent_id: agentId } : {}),
-          quantity: intent.quantity ?? 1,
-          item_id: deal.itemId,
-          quote: deal.quote,
-          comparison: deal.comparison,
-          sources: deal.sources,
-          rationale: deal.rationale,
-        }),
-        engine,
-      };
-    }
-    if (intent.intent === "booking") {
-      if (!intent.date || !intent.time || !intent.party_size)
-        return {
-          type: "answer",
-          answer:
-            intent.answer || "What time and how many people should I book for?",
-          sources: [],
-          engine,
-        };
-      return {
-        type: "proposal",
-        proposal: await this.propose(owner, "marina-table", "book", {
-          ...(agentId ? { agent_id: agentId } : {}),
-          booking: {
-            date: intent.date,
-            time: intent.time,
-            party_size: intent.party_size,
-          },
-        }),
-        engine,
-      };
-    }
-    if (intent.intent === "pets_condition")
-      return {
-        type: "proposal",
-        proposal: await this.propose(owner, "daily-paws", "condition", {
-          ...(agentId ? { agent_id: agentId } : {}),
-          quantity: intent.quantity ?? 1,
-          under: intent.under_minor ?? 3000,
-        }),
-        engine,
-      };
-    if (intent.intent === "delivery") {
-      const service = intent.service_id;
-      const messages = this.store
-        .messages(owner, service ?? undefined)
-        .filter((m) => m.origin === "agentmail");
-      return {
-        type: "answer",
-        answer:
-          messages[0]?.text.split("\n\n---")[0] ??
-          "There is no received delivery confirmation yet. I will keep the service status pending rather than guess.",
-        sources: messages.slice(0, 2).map((m) => m.id),
-        engine,
-      };
-    }
-    if (intent.intent === "cancel")
-      return {
-        type: "answer",
-        answer:
-          "Open the streaming service and choose Cancel subscription to review its effective date.",
-        sources: [],
-        engine,
-      };
-    return {
-      type: "answer",
-      answer:
-        intent.answer ||
-        "This demo supports the fictional film, coffee offers, marina table bookings and dog-food restocking. Try one of those requests.",
-      sources: [],
-      engine,
-    };
+      text,
+      store: this.store,
+      turn: this.turn,
+      ...(agentId ? { agentId } : {}),
+      services: () => this.services(),
+      propose: (serviceId, kind, options) =>
+        this.propose(owner, serviceId, kind, options),
+    });
   }
   async propose(
     owner: string,
     serviceId: string,
-    requested: "subscribe" | "buy" | "book" | "condition",
+    requested: "subscribe" | "buy" | "book" | "condition" | "schedule",
     options: {
+      title?: string;
       quantity?: number;
       booking?: Proposal["booking"];
       under?: number;
@@ -410,9 +274,11 @@ export class AppService {
       sources?: string[];
       rationale?: string;
       agent_id?: string;
+      monthly_schedule?: MonthlyPurchaseInput;
+      owner_request?: string;
     } = {},
   ): Promise<Proposal> {
-    const service = this.service(serviceId);
+    const service = await this.service(serviceId);
     const item = options.item_id
       ? service.items.find((item) => item.id === options.item_id)
       : service.items[0];
@@ -422,15 +288,15 @@ export class AppService {
         "Choose a supported item or plan.",
       );
     const kind =
-      requested === "condition"
-        ? "condition"
+      requested === "condition" || requested === "schedule"
+        ? requested
         : service.kind === "subscription"
           ? "subscribe"
           : service.kind === "booking"
             ? "book"
             : "buy";
     if (options.agent_id) this.store.agent(owner, options.agent_id);
-    let wallet = this.store.ensureWallet(owner, service);
+    let wallet = this.store.ensureWallet(owner, service, options.agent_id);
     if (options.agent_id)
       wallet = this.store.attachWalletAgent(owner, wallet.id, options.agent_id);
     const quote =
@@ -441,27 +307,41 @@ export class AppService {
         ...(options.booking ? { booking: options.booking } : {}),
       }));
     const now = this.store.now().toISOString();
+    const monthly =
+      kind === "schedule" && options.monthly_schedule
+        ? makeMonthlySchedule(quote, options.monthly_schedule, this.store.now())
+        : undefined;
+    if (kind === "schedule" && !monthly)
+      throw new MerchantError(
+        "SCHEDULE_REQUIRED",
+        "Choose the exact monthly purchase rule for owner review.",
+      );
     const proposal: Proposal = {
+      ...(options.owner_request
+        ? { owner_request: options.owner_request }
+        : {}),
       id: randomUUID(),
       owner,
       ...(wallet.agent_id ? { agent_id: wallet.agent_id } : {}),
       service_id: serviceId,
       wallet_id: wallet.id,
       kind,
+      ...(monthly ? { monthly_schedule: monthly } : {}),
       title:
-        kind === "subscribe"
-          ? `One month of ${service.name}`
-          : kind === "book"
-            ? "Reserve a table near the marina"
-            : kind === "condition"
-              ? "Restock dog food when the price drops"
-              : quote.item_name,
+        options.title ??
+        (kind === "schedule"
+          ? `Monthly ${quote.item_name}`
+          : kind === "subscribe"
+            ? `One month of ${service.name}`
+            : kind === "book"
+              ? `Reserve ${quote.item_name}`
+              : kind === "condition"
+                ? `Buy ${quote.item_name} when its price drops`
+                : quote.item_name),
       rationale:
-        kind === "subscribe"
-          ? "One paid month. Renewal disabled, with cancellation at the end of the paid period."
-          : kind === "condition"
-            ? `Buy this exact variant once when its all-in price is below $${((options.under ?? 3000) / 100).toFixed(2)}.`
-            : quote.terms,
+        kind === "condition"
+          ? `Buy this exact variant once when its all-in price is below $${((options.under ?? 3000) / 100).toFixed(2)}.`
+          : quote.terms,
       amount: quote.amount_minor,
       quantity: quote.quantity,
       item_id: quote.item_id,
@@ -483,29 +363,13 @@ export class AppService {
           : null,
       period_end: null,
       cancel_effective_at: null,
-      sources: this.store
-        .messages(owner, serviceId)
-        .filter(
-          (message) =>
-            !options.agent_id || message.agent_id === options.agent_id,
-        )
-        .filter(
-          (m) =>
-            !m.facts.suspicious &&
-            (!m.facts.expires ||
-              new Date(m.facts.expires) > this.store.now()) &&
-            m.facts.item
-              ?.toLowerCase()
-              .includes(kind === "condition" ? "dog" : "coffee") &&
-            (kind === "condition" ||
-              m.facts.amount_minor === quote.amount_minor / quote.quantity),
-        )
-        .slice(0, 3)
-        .map((m) => m.id),
+      sources: [],
       created_at: now,
       updated_at: now,
     };
     if (options.rationale) proposal.rationale = options.rationale;
+    if (monthly)
+      validateScheduledQuote(proposal, quote, service, this.store.now(), false);
     if (options.sources) proposal.sources = options.sources;
     if (options.comparison) proposal.comparison = options.comparison;
     if (
@@ -653,6 +517,7 @@ export class AppService {
       this.updateRules(owner, wallet.id, rules);
       wallet = this.store.wallet(owner, wallet.id);
       proposal.wallet_revision = wallet.revision;
+      if (proposal.kind === "schedule") this.store.saveProposal(proposal);
     }
     if (wallet.revision !== proposal.wallet_revision)
       throw new MerchantError(
@@ -674,13 +539,24 @@ export class AppService {
         "PERMISSION_EXPIRED",
         "This wallet permission expired. Save a future expiry before approving.",
       );
-    if (proposal.amount > wallet.per_action)
+    if (proposal.kind === "schedule") {
+      proposal = await this.reviewSchedule(owner, id);
+      wallet = this.store.wallet(owner, proposal.wallet_id);
+    }
+    if (proposal.kind !== "schedule" && proposal.amount > wallet.per_action)
       throw new MerchantError(
         "ACTION_LIMIT",
         "This action exceeds the saved per-action limit.",
       );
+    if (proposal.kind !== "condition" && proposal.kind !== "schedule")
+      this.store.assertAgentAllowance(
+        owner,
+        proposal.agent_id ?? wallet.agent_id,
+        proposal.amount,
+      );
     if (
       proposal.kind !== "condition" &&
+      proposal.kind !== "schedule" &&
       (!proposal.quote_expires ||
         new Date(proposal.quote_expires) <= this.store.now())
     )
@@ -752,6 +628,11 @@ export class AppService {
         );
       return { type: "redirect", url: link };
     }
+    if (proposal.kind === "schedule")
+      return {
+        type: "proposal",
+        proposal: this.armSchedule(owner, proposal.id),
+      };
     if (proposal.kind === "condition") {
       proposal.status = "WAITING";
       this.store.saveProposal(proposal);
@@ -824,6 +705,10 @@ export class AppService {
       wallet.service_id,
     );
     const proposal = this.store.proposal(owner, setup.proposal_id);
+    if (proposal.kind === "schedule") {
+      await this.reviewSchedule(owner, proposal.id);
+      return this.armSchedule(owner, proposal.id);
+    }
     if (proposal.kind === "condition") {
       proposal.status = "WAITING";
       this.store.saveProposal(proposal);
@@ -831,10 +716,310 @@ export class AppService {
     }
     return this.pay(owner, proposal.id);
   }
+  private async reviewSchedule(owner: string, id: string) {
+    const p = this.store.proposal(owner, id),
+      rule = p.monthly_schedule;
+    const wallet = this.store.wallet(owner, p.wallet_id);
+    if (
+      p.kind !== "schedule" ||
+      !rule ||
+      !p.agent_id ||
+      wallet.agent_id !== p.agent_id
+    )
+      throw new MerchantError(
+        "SCHEDULE_REQUIRED",
+        "Review the exact agent, product and monthly rule first.",
+      );
+    if (wallet.mode !== "auto")
+      throw new MerchantError(
+        "SCHEDULE_AUTO_REQUIRED",
+        "Monthly purchases require an explicit automatic payment permission within your limits.",
+      );
+    const agent = this.store.agent(owner, p.agent_id);
+    if (agent.status === "paused")
+      throw new MerchantError(
+        "AGENT_PAUSED",
+        "Resume this agent before approving a monthly rule.",
+      );
+    const period = monthlyDue(rule, this.store.now()).period;
+    const attempted =
+      monthlyPeriodHasPurchase(this.store, owner, p, this.store.now()) ||
+      this.store
+        .proposals(owner)
+        .some(
+          (c) =>
+            c.scheduled_by?.proposal_id === p.id &&
+            c.scheduled_by.period === period &&
+            ["PAID", "PAYING", "RECONCILING", "DECLINED"].includes(c.status),
+        );
+    const next = nextMonthlyDue(rule, this.store.now(), attempted);
+    if (!next || new Date(wallet.expires_at) <= new Date(next))
+      throw new MerchantError(
+        "SCHEDULE_PERMISSION_EXPIRES",
+        "The rule or wallet permission expires before the next monthly purchase. Review their expiry dates.",
+      );
+    const service = (await this.services()).find((s) => s.id === p.service_id);
+    if (!service)
+      throw new MerchantError(
+        "SCHEDULE_ITEM_UNAVAILABLE",
+        "The connected product service is unavailable.",
+      );
+    const quote = await merchantTool<Quote>(p.service_id, "get_quote", {
+      item_id: p.item_id,
+      quantity: p.quantity,
+    });
+    validateScheduledQuote(p, quote, service, this.store.now(), false);
+    if (wallet.auto_under < 1 || wallet.per_action < 1)
+      throw new MerchantError(
+        "SCHEDULE_AUTO_LIMIT",
+        "Choose a positive automatic and per-action limit for future monthly purchases.",
+      );
+    const current = this.store.proposal(owner, id);
+    if (
+      !["NEEDS_APPROVAL", "APPROVED"].includes(current.status) ||
+      current.wallet_revision !==
+        this.store.wallet(owner, current.wallet_id).revision
+    )
+      throw new MerchantError(
+        "RULES_CHANGED",
+        "The monthly rule or wallet changed while its current quote was being checked.",
+      );
+    current.quote_id = quote.id;
+    current.quote_expires = quote.expires_at;
+    current.amount = quote.amount_minor;
+    this.store.saveProposal(current);
+    return current;
+  }
+  private armSchedule(owner: string, id: string) {
+    return this.store.transaction(() => {
+      const p = this.store.proposal(owner, id),
+        wallet = this.store.wallet(owner, p.wallet_id),
+        rule = p.monthly_schedule;
+      if (
+        p.kind !== "schedule" ||
+        p.status !== "APPROVED" ||
+        !rule ||
+        !wallet.vault_id ||
+        wallet.mode !== "auto" ||
+        wallet.paused ||
+        wallet.status === "revoked" ||
+        wallet.revision !== p.wallet_revision ||
+        new Date(rule.expires_at) <= this.store.now() ||
+        new Date(wallet.expires_at) <= this.store.now()
+      )
+        throw new MerchantError(
+          "SCHEDULE_APPROVAL_REQUIRED",
+          "The monthly rule needs current owner approval and a valid saved payment permission.",
+        );
+      if (
+        this.store
+          .proposals(owner)
+          .some(
+            (o) =>
+              o.id !== p.id &&
+              o.kind === "schedule" &&
+              o.status === "WAITING" &&
+              o.agent_id === p.agent_id &&
+              o.service_id === p.service_id &&
+              o.item_id === p.item_id,
+          )
+      )
+        throw new MerchantError(
+          "SCHEDULE_EXISTS",
+          "An approved monthly rule already covers this exact product. Stop it before approving a replacement.",
+        );
+      rule.approved_at = this.store.now().toISOString();
+      p.status = "WAITING";
+      p.reason = null;
+      this.store.saveProposal(p);
+      this.store.log(
+        owner,
+        "MONTHLY_RULE_APPROVED",
+        "Owner approved one exact-item purchase per eligible calendar month within the saved boundaries. No purchase was dispatched by this approval.",
+        p.service_id,
+        null,
+        p.agent_id,
+      );
+      return p;
+    });
+  }
+  /** Generic standing-rule execution. No product names or scenario-specific decisions. */
+  async evaluateSchedules(owner: string) {
+    for (const observed of this.store
+      .proposals(owner)
+      .filter((p) => p.kind === "schedule" && p.status === "WAITING")) {
+      const rule = observed.monthly_schedule;
+      if (!rule) continue;
+      if (new Date(rule.expires_at) <= this.store.now()) {
+        observed.status = "EXPIRED";
+        observed.reason = "The approved monthly rule expired.";
+        this.store.saveProposal(observed);
+        continue;
+      }
+      const due = monthlyDue(rule, this.store.now());
+      if (!due.eligible) continue;
+      const children = this.store
+        .proposals(owner)
+        .filter((p) => p.scheduled_by?.proposal_id === observed.id);
+      const pending = children.find((p) =>
+        ["PAYING", "RECONCILING"].includes(p.status),
+      );
+      if (pending) {
+        await this.pay(owner, pending.id);
+        continue;
+      }
+      const existing = children.find(
+        (p) => p.scheduled_by!.period === due.period,
+      );
+      if (
+        monthlyPeriodHasPurchase(
+          this.store,
+          owner,
+          observed,
+          this.store.now(),
+        ) &&
+        !existing
+      )
+        continue;
+      if (
+        existing &&
+        (existing.status === "PAID" ||
+          existing.status === "DECLINED" ||
+          existing.merchant_action_id ||
+          existing.paypal_order_id ||
+          existing.capture_id ||
+          existing.reserved)
+      )
+        continue;
+      try {
+        const service = (await this.services()).find(
+          (s) => s.id === observed.service_id,
+        );
+        if (!service)
+          throw new MerchantError(
+            "SCHEDULE_ITEM_UNAVAILABLE",
+            "The exact product service is unavailable. Review is required.",
+          );
+        const quote = await merchantTool<Quote>(
+          observed.service_id,
+          "get_quote",
+          { item_id: observed.item_id, quantity: observed.quantity },
+        );
+        validateScheduledQuote(observed, quote, service, this.store.now());
+        const child = this.store.transaction(() => {
+          const parent = this.store.proposal(owner, observed.id);
+          if (parent.status !== "WAITING") return null;
+          const prior = this.store
+            .proposals(owner)
+            .find(
+              (p) =>
+                p.scheduled_by?.proposal_id === parent.id &&
+                p.scheduled_by.period === due.period,
+            );
+          if (
+            prior &&
+            ["PAID", "PAYING", "RECONCILING", "DECLINED"].includes(prior.status)
+          )
+            return null;
+          if (
+            prior &&
+            (prior.merchant_action_id ||
+              prior.paypal_order_id ||
+              prior.capture_id ||
+              prior.reserved)
+          )
+            return null;
+          const {
+            monthly_schedule: _schedule,
+            comparison: _comparison,
+            ...base
+          } = parent;
+          const p: Proposal = {
+            ...base,
+            id: scheduledPurchaseId(parent.id, due.period),
+            kind: "buy",
+            status: "APPROVED",
+            title: quote.item_name,
+            scheduled_by: { proposal_id: parent.id, period: due.period },
+            rationale: `Monthly purchase under the owner's exact-item standing rule for ${due.period}.`,
+            amount: quote.amount_minor,
+            quote_id: quote.id,
+            quote_expires: quote.expires_at,
+            reserved: 0,
+            period_key: null,
+            merchant_action_id: null,
+            paypal_order_id: null,
+            capture_id: null,
+            reason: null,
+            created_at: prior?.created_at ?? this.store.now().toISOString(),
+            updated_at: this.store.now().toISOString(),
+          };
+          assertScheduledDispatch(this.store, owner, p);
+          this.store.saveProposal(p);
+          return p;
+        });
+        if (child) {
+          const outcome = await this.pay(owner, child.id);
+          if (!["PAID", "PAYING", "RECONCILING"].includes(outcome.status))
+            throw new MerchantError(
+              "SCHEDULE_PURCHASE_REVIEW",
+              outcome.reason ??
+                "The monthly order needs review before another attempt.",
+            );
+        }
+      } catch (error) {
+        const p = this.store.proposal(owner, observed.id);
+        if (p.status !== "WAITING") continue;
+        p.status = "NEEDS_APPROVAL";
+        p.monthly_schedule!.approved_at = null;
+        p.reason =
+          error instanceof Error
+            ? error.message
+            : "The monthly purchase needs owner review. No new order was dispatched.";
+        this.store.saveProposal(p);
+        this.store.log(
+          owner,
+          "MONTHLY_RULE_REVIEW_REQUIRED",
+          p.reason,
+          p.service_id,
+          null,
+          p.agent_id,
+        );
+      }
+    }
+  }
   async pay(owner: string, id: string): Promise<Proposal> {
     let proposal = this.store.proposal(owner, id);
     if (proposal.status === "PAID") return proposal;
-    proposal = this.store.reserve(owner, id);
+    if (proposal.history_source)
+      throw new MerchantError(
+        "LINKED_HISTORY_READONLY",
+        "This historical payment is read-only. Manage its original service connection.",
+      );
+    try {
+      proposal = this.store.reserve(owner, id);
+    } catch (error) {
+      // A policy rejection before dispatch must return to the owner's review
+      // queue. Never rewrite an action whose payment outcome may be uncertain.
+      const current = this.store.proposal(owner, id);
+      if (
+        current.status === "APPROVED" &&
+        current.kind !== "condition" &&
+        current.reserved === 0 &&
+        !current.merchant_action_id &&
+        !current.paypal_order_id &&
+        !current.capture_id
+      ) {
+        current.status = current.scheduled_by ? "BLOCKED" : "NEEDS_APPROVAL";
+        if (current.scheduled_by)
+          current.reason =
+            error instanceof Error
+              ? error.message
+              : "The monthly rule needs owner review before dispatch.";
+        this.store.saveProposal(current);
+      }
+      throw error;
+    }
     const wallet = this.store.wallet(owner, proposal.wallet_id);
     try {
       if (!proposal.merchant_action_id) {
@@ -1000,63 +1185,14 @@ export class AppService {
     }
     return this.store.proposal(owner, id);
   }
-  /** Prepares a reply for the owner to edit and approve. Nothing is sent here. */
-  private async replyDraft(
-    owner: string,
-    agent: PersonalAgent | undefined,
-    ask: string,
-    serviceId: string | null,
-    engine: string,
-  ) {
-    const message = this.store
-      .messages(owner)
-      .filter(
-        (candidate) =>
-          !candidate.facts.suspicious &&
-          (!agent || candidate.agent_id === agent.id) &&
-          (!serviceId || candidate.service_id === serviceId),
-      )
-      .sort((a, b) => b.received_at.localeCompare(a.received_at))[0];
-    if (!message)
-      return {
-        type: "answer",
-        answer: "There is no message to reply to yet.",
-        sources: [],
-        engine,
-      };
-    const to = senderName(message.from);
-    const body =
-      engine === "fixture"
-        ? `Hello,\n\nThank you for your message "${message.subject}". Could you confirm the details and let me know if anything changes?\n\nThank you,\nMaya`
-        : await this.draft(ask, {
-            from: message.from,
-            subject: message.subject,
-            text: message.text.slice(0, 4000),
-          });
-    this.store.log(
-      owner,
-      "REPLY_DRAFTED",
-      `A reply to ${to} was drafted for the owner to approve. Nothing was sent.`,
-      message.service_id,
-    );
-    return {
-      type: "reply",
-      draft: {
-        message_id: message.id,
-        service_id: message.service_id,
-        to_name: to,
-        subject: message.subject,
-        body,
-      },
-      engine,
-    };
-  }
   /** Sends a reply the owner approved, from the agent's own address, once per request. */
   async sendReply(
     owner: string,
     messageId: string,
     text: string,
     requestId: string,
+    documentIds: string[] = [],
+    draftId?: string,
   ) {
     const message = this.store
       .messages(owner)
@@ -1081,9 +1217,8 @@ export class AppService {
       );
     const agent = this.store.agent(owner, message.agent_id);
     const to = senderName(message.from);
-    const key = `reply-sent:${owner}:${requestId}`;
-    const earlier = this.store.setting<{ sent_at: string }>(key);
-    if (earlier) return { sent: true, to_name: to, sent_at: earlier.sent_at };
+    const operationId = draftId ?? requestId;
+    const key = `reply-sent:${owner}:${operationId}`;
     if (!agent.inbox_id)
       throw new MerchantError(
         "ADDRESS_REQUIRED",
@@ -1094,21 +1229,125 @@ export class AppService {
         "NOT_REPLIABLE",
         "This is a sample preview that was never delivered, so there is no sender to reply to.",
       );
+    const addresses = replyAddresses(message);
+    if (message.reply_to === undefined || !addresses.length)
+      throw new MerchantError(
+        "REPLY_ROUTING_REQUIRED",
+        "Refresh this agent's inbox to verify the reply recipient before sending.",
+      );
     if (!this.mail.sendReply)
       throw new MerchantError(
         "EMAIL_NOT_CONFIGURED",
         "Replies are not available in this setup.",
       );
-    await this.mail.sendReply(agent, message, body, requestId);
+    const documents = [...new Set(documentIds)].map((id) =>
+      this.store.document(owner, id, agent.id),
+    );
+    if (
+      documents.length > 8 ||
+      documents.some((d) => d.status !== "readable") ||
+      documents.reduce((sum, d) => sum + d.size, 0) > 3 * 1024 * 1024
+    )
+      throw new MerchantError(
+        "ATTACHMENT_LIMIT",
+        "Choose up to eight readable documents totalling no more than 3 MB.",
+      );
+    const fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          agent_id: agent.id,
+          inbox: agent.inbox_id,
+          message_id: message.id,
+          provider_id: message.provider_id,
+          recipients: addresses,
+          body,
+          documents: documents.map((d) => d.id),
+        }),
+      )
+      .digest("hex");
+    const earlier = this.store.setting<{
+      fingerprint?: string;
+      sent_at?: string;
+      provider_message_id?: string;
+    }>(key);
+    if (earlier && earlier.fingerprint !== fingerprint)
+      throw new MerchantError(
+        "REPLY_CHANGED",
+        "This approval was already used for different content, recipients or attachments. Check the original send before approving a new draft.",
+      );
+    if (earlier?.sent_at)
+      return {
+        sent: true,
+        to_name: to,
+        to_addresses: addresses,
+        sent_at: earlier.sent_at,
+        provider_message_id: earlier.provider_message_id,
+      };
+    const prepared = this.store.setting<PreparedReply>(
+      `agent-reply:${owner}:${agent.id}`,
+    );
+    if (
+      draftId &&
+      (prepared?.id !== draftId ||
+        prepared.message_id !== message.id ||
+        prepared.to_address !== addresses.join(", "))
+    )
+      throw new MerchantError(
+        "DRAFT_CHANGED",
+        "This draft changed. Review the current draft before sending.",
+      );
+    this.store.transaction(() => {
+      const current = this.store.setting<{ fingerprint?: string }>(key);
+      if (current && current.fingerprint !== fingerprint)
+        throw new MerchantError(
+          "REPLY_CHANGED",
+          "This approval is already attached to another reply.",
+        );
+      if (!current) this.store.setSetting(key, { fingerprint });
+      if (draftId && prepared)
+        this.store.setSetting(`agent-reply:${owner}:${agent.id}`, {
+          ...prepared,
+          body,
+          documents: documents.map((d) => ({ id: d.id, filename: d.filename })),
+        });
+    });
+    const providerMessageId = await this.mail.sendReply(
+      agent,
+      message,
+      body,
+      operationId,
+      documents.map((d) => ({
+        filename: d.filename,
+        contentType: d.content_type,
+        content: this.store.documentContent(owner, d.id).toString("base64"),
+      })),
+    );
+    const saved = this.store.setting<PreparedReply>(
+      `agent-reply:${owner}:${agent.id}`,
+    );
+    if (saved?.message_id === message.id && (!draftId || saved.id === draftId))
+      this.store.setSetting(`agent-reply:${owner}:${agent.id}`, null);
     const sent_at = this.store.now().toISOString();
-    this.store.setSetting(key, { sent_at });
+    this.store.setSetting(key, {
+      fingerprint,
+      sent_at,
+      provider_message_id: providerMessageId,
+    });
     this.store.log(
       owner,
       "REPLY_SENT",
-      `To ${to}, approved by the owner: "${body.replace(/\s+/g, " ").slice(0, 140)}"`,
+      `To ${addresses.join(", ")}. Message ${providerMessageId}. ${documents.length} original attachments. Approved by the owner.`,
       message.service_id,
+      null,
+      agent.id,
     );
-    return { sent: true, to_name: to, sent_at };
+    return {
+      sent: true,
+      to_name: to,
+      to_addresses: addresses,
+      provider_message_id: providerMessageId,
+      sent_at,
+    };
   }
   dismissed(owner: string): string[] {
     return this.store.setting<string[]>(`dismissed:${owner}`) ?? [];
@@ -1160,7 +1399,7 @@ export class AppService {
           !["DECLINED", "BLOCKED", "EXPIRED"].includes(proposal.status),
       );
     if (open) return open;
-    const service = this.service(message.service_id);
+    const service = await this.service(message.service_id);
     const amount = message.facts.amount_minor;
     const item = service.items.find((item) => item.amount_minor === amount);
     const mismatch = new MerchantError(
@@ -1252,6 +1491,11 @@ export class AppService {
   }
   async cancel(owner: string, id: string) {
     const p = this.store.proposal(owner, id);
+    if (p.history_source)
+      throw new MerchantError(
+        "LINKED_HISTORY_READONLY",
+        "This historical payment is read-only. Manage its original service connection.",
+      );
     if (p.kind !== "subscribe" || !p.merchant_action_id)
       throw new MerchantError(
         "UNSUPPORTED_OPERATION",
@@ -1273,13 +1517,42 @@ export class AppService {
     await this.mail.deliverOutbox(this.store);
     return p;
   }
+  async confirmCancellations(owner: string, id: string, revision: number) {
+    const review = await confirmCancellationReview(
+      this.store,
+      owner,
+      id,
+      revision,
+    );
+    try {
+      await this.mail.deliverOutbox(this.store);
+      review.delivery_pending = false;
+    } catch {
+      review.delivery_pending = true;
+    }
+    this.store.setSetting(`cancellation-review:${owner}:${id}`, review);
+    const { owner: _owner, ...visible } = review;
+    return { cancellation: visible };
+  }
+  discardCancellations(owner: string, id: string) {
+    discardCancellationReview(this.store, owner, id);
+    return { discarded: true };
+  }
+  cancellation(owner: string, id: string) {
+    const { owner: _owner, ...visible } = cancellationReview(
+      this.store,
+      owner,
+      id,
+    );
+    return visible;
+  }
   async reset(owner: string) {
     const proposals = this.store.transaction(() => {
       const proposals = this.store.proposals(owner);
       if (proposals.some((p) => ["PAYING", "RECONCILING"].includes(p.status)))
         throw new MerchantError(
           "PAYMENT_PENDING",
-          "Resolve the in-flight payment before resetting this demo.",
+          "Resolve the in-flight payment before resetting this workspace.",
         );
       for (const wallet of this.store.wallets(owner)) {
         wallet.paused = true;
@@ -1290,7 +1563,7 @@ export class AppService {
         ["WAITING", "APPROVED", "NEEDS_APPROVAL", "DRAFT"].includes(p.status),
       )) {
         proposal.status = "BLOCKED";
-        proposal.reason = "Demo workspace reset.";
+        proposal.reason = "Workspace reset.";
         this.store.saveProposal(proposal);
       }
       return proposals;
@@ -1471,6 +1744,11 @@ export class AppService {
   }
   reconnect(owner: string, walletId: string) {
     const wallet = this.store.wallet(owner, walletId);
+    if (wallet.agent_id && this.store.agent(owner, wallet.agent_id).archived_at)
+      throw new MerchantError(
+        "AGENT_ARCHIVED",
+        "This agent is archived. Connect the service from your current agent instead.",
+      );
     if (wallet.status !== "revoked")
       return this.store.publicWallet(owner, wallet);
     if (wallet.vault_id)
@@ -1492,9 +1770,11 @@ export class AppService {
     return this.store.publicWallet(owner, wallet);
   }
   async sync(owner: string) {
+    await this.evaluateSchedules(owner);
     await this.evaluateConditions(owner);
     const seenInboxes = new Set<string>();
     for (const agent of this.store.agents(owner)) {
+      if (agent.archived_at) continue;
       if (!agent.inbox_id || !this.mail.syncAgentInbox) continue;
       seenInboxes.add(agent.inbox_id);
       try {
@@ -1508,6 +1788,11 @@ export class AppService {
       }
     }
     for (const wallet of this.store.wallets(owner)) {
+      if (
+        wallet.agent_id &&
+        this.store.agent(owner, wallet.agent_id).archived_at
+      )
+        continue;
       if (wallet.inbox_id && seenInboxes.has(wallet.inbox_id)) continue;
       if (wallet.inbox_id) seenInboxes.add(wallet.inbox_id);
       try {
@@ -1537,9 +1822,14 @@ export class AppService {
         latestSubscriptions.set(p.wallet_id, p);
     }
     for (const p of latestSubscriptions.values()) {
-      const action = await merchantTool<Action>(p.service_id, "get_status", {
-        action_id: p.merchant_action_id,
-      });
+      const action = await merchantTool<Action>(
+        p.service_id,
+        "get_status",
+        {
+          action_id: p.merchant_action_id,
+        },
+        p.history_source?.base_url,
+      );
       if (action.status === "CANCELED") {
         const latest = this.store
           .proposals(owner)

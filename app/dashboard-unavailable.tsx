@@ -10,7 +10,7 @@ export default function DashboardUnavailable({
   return (
     <section className="ui-col" data-testid="dashboard-unavailable">
       <div className="ui-empty">
-        <h2>Dashboards are not available in this hosted demo</h2>
+        <h2>Dashboards are not available in this workspace</h2>
         <p>
           You can still review {agent ? `${agent.name}’s` : "each agent’s"}{" "}
           inbox, services and activity.

@@ -44,6 +44,11 @@ export type Action = {
   };
 };
 export type OutboundEmail = {
+  attachments?: {
+    filename: string;
+    content_type: string;
+    content_base64: string;
+  }[];
   id: string;
   action_id: string;
   type: string;
@@ -532,7 +537,33 @@ export class Merchant {
       booking: action.quote.booking ?? null,
     };
     const structuredText = `${text}\n\n--- mailbox.service-event.v1 ---\n${JSON.stringify(event)}\n--- end mailbox.service-event.v1 ---`;
+    const invoice =
+      type === "confirmation" && action.capture_id
+        ? {
+            filename: `invoice-${action.id}.txt`,
+            content_type: "text/plain",
+            content_base64: Buffer.from(
+              [
+                "FICTIONAL MERCHANT INVOICE - PAYPAL SANDBOX",
+                `Merchant: ${service.name}`,
+                `Invoice: ${action.payment.invoice_id}`,
+                `Issued: ${action.paid_at ?? this.now().toISOString()}`,
+                `Customer address: ${action.address}`,
+                `Description: ${action.quote.item_name}`,
+                `Quantity: ${action.quote.quantity}`,
+                `All-in total: ${action.quote.currency} ${(action.quote.amount_minor / 100).toFixed(2)}`,
+                "Status: Paid",
+                `PayPal sandbox capture: ${action.capture_id}`,
+                `Merchant action reference: ${action.id}`,
+                `Terms: ${action.quote.terms}`,
+                "This controlled demonstration record is not a tax invoice from a real-world merchant.",
+              ].join("\n"),
+              "utf8",
+            ).toString("base64"),
+          }
+        : null;
     const email: OutboundEmail = {
+      ...(invoice ? { attachments: [invoice] } : {}),
       id: randomUUID(),
       action_id: action.id,
       type,

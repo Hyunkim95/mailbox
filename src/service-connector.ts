@@ -9,11 +9,27 @@ export async function merchantTool<T>(
   serviceId: string | null,
   name: string,
   args: Record<string, unknown> = {},
+  baseOverride?: string,
 ): Promise<T> {
   const base =
+    baseOverride ??
     process.env.MOCK_MERCHANT_URL ??
     `http://127.0.0.1:${process.env.PORT ?? "3000"}`;
   const token = process.env.MOCK_MERCHANT_TOKEN;
+  const endpoint = new URL(base);
+  if (
+    endpoint.username ||
+    endpoint.password ||
+    !(
+      endpoint.protocol === "https:" ||
+      (endpoint.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname))
+    )
+  )
+    throw new MerchantError(
+      "MERCHANT_ENDPOINT_INVALID",
+      "Use an HTTPS service connection or a local development endpoint.",
+    );
   if (!secretReady(token))
     throw new MerchantError(
       "MERCHANT_NOT_CONFIGURED",

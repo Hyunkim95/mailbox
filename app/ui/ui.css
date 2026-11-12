@@ -78,6 +78,57 @@ summary:focus-visible {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
+.ui-work {
+  margin-top: var(--s-8);
+  margin-bottom: var(--s-8);
+}
+.ui-work .ui-work-heading {
+  font: var(--text-title);
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+.ui-task {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: var(--s-3);
+  padding: var(--s-4) 0;
+  border-bottom: 1px solid var(--line);
+}
+.ui-task-icon {
+  color: var(--warn);
+  padding-top: var(--s-1);
+}
+.ui-task-icon.is-ready {
+  color: var(--ok);
+}
+.ui-task-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  font-weight: 500;
+}
+.ui-evidence-links {
+  display: inline-flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font: var(--text-label);
+}
+.ui-answer-copy {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: var(--text-body);
+}
+.ui-monthly-rule {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--ui-line, #e9eaee);
+}
+.ui-monthly-rule p {
+  margin: 0;
+}
 
 /* ---------- shell ---------- */
 .ui-shell {
@@ -1207,8 +1258,15 @@ button.ui-row:hover {
     flex-direction: row;
   }
   .ui-side-scroll {
+    min-width: 0;
+    align-items: center;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+  .ui-side-scroll > nav,
+  .ui-side nav > div {
+    display: flex;
+    flex-shrink: 0;
   }
   .ui-brand {
     padding: 0;
@@ -1222,6 +1280,7 @@ button.ui-row:hover {
     display: none;
   }
   .ui-nav {
+    flex-shrink: 0;
     width: auto;
     gap: var(--s-2);
     white-space: nowrap;

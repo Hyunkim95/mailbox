@@ -1,5 +1,20 @@
 import { seedMessages } from "../src/seed.ts";
+import { incomingService } from "../src/email.ts";
+import { extractEmail } from "../src/ai.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { checkConfirmation } from "../src/receipt-matching.ts";
+import {
+  prepareCancellationReview,
+  confirmCancellationReview,
+} from "../src/cancellation-review.ts";
+import { merchantTool } from "../src/service-connector.ts";
 import { digestFor } from "../src/queue.ts";
+import {
+  managedServices,
+  managedServiceStatus,
+} from "../src/managed-services.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -7,23 +22,33 @@ import { AppStore } from "../src/app-store.ts";
 import { AppService } from "../src/app-service.ts";
 import { PayPal } from "../src/paypal.ts";
 import { catalogue } from "../src/catalogue.ts";
-import type { AskIntent, interpretAsk } from "../src/ai.ts";
+import type { AgentTurn } from "../src/agent-model.ts";
 import {
   Merchant,
+  createService,
   createMerchantHttp,
   MerchantError,
   type VerifiedCapture,
+  type Action,
+  type Service,
 } from "@mailbox/service-sdk";
 
 async function fixture(
   options: {
     loseFirstResponse?: boolean;
-    interpret?: typeof interpretAsk;
+    turn?: AgentTurn;
+    appPath?: string;
+    services?: Service[];
   } = {},
 ) {
   let instant = "2026-11-11T12:00:00Z";
   const now = () => new Date(instant);
-  const merchant = new Merchant(":memory:", catalogue.services, "maya", now);
+  const merchant = new Merchant(
+    ":memory:",
+    structuredClone(options.services ?? catalogue.services),
+    "maya",
+    now,
+  );
   const captures = new Map<string, VerifiedCapture>(),
     orders = new Map<string, Record<string, unknown>>();
   let charges = 0,
@@ -114,7 +139,7 @@ async function fixture(
     );
   };
   const store = new AppStore(
-    ":memory:",
+    options.appPath ?? ":memory:",
     now,
     "integration-vault-key-at-least-32-characters",
   );
@@ -126,7 +151,7 @@ async function fixture(
       deliverOutbox: async () => {},
       syncInbox: async () => {},
     },
-    options.interpret,
+    options.turn,
   );
   const wallet = store.ensureWallet(
     "owner",
@@ -141,6 +166,7 @@ async function fixture(
     store,
     app,
     merchant,
+    request,
     wallet,
     charges: () => charges,
     advanceTo: (value: string) => {
@@ -160,43 +186,429 @@ async function fixture(
   };
 }
 
-test("model-backed film lookup uses the grounded title even when its general query is the whole request", async () => {
-  const intent: AskIntent = {
-    intent: "film",
-    query: "I want to watch The Lantern Coast",
-    film_title: "The Lantern Coast",
-    service_id: null,
-    answer: null,
-    date: null,
-    time: null,
-    party_size: null,
-    quantity: 1,
-    under_minor: null,
-  };
-  const f = await fixture({ interpret: async () => intent });
+test("a request composes discovery, current quote and proposal through the real MCP connector", async () => {
+  const f = await fixture({
+    turn: async (_context, history) => {
+      const id = String(history.length);
+      if (!history.length)
+        return { id, name: "list_services", arguments: { query: "" } };
+      if (history.length === 1) {
+        const found = history[0]!.result as {
+          services: typeof catalogue.services;
+        };
+        const service = found.services.find((s) => s.id === "coast-screen")!;
+        assert(service);
+        return {
+          id,
+          name: "get_quote",
+          arguments: {
+            service_id: service.id,
+            item_id: service.items[0]!.id,
+            quantity: 1,
+            booking: null,
+          },
+        };
+      }
+      if (history.length === 2) {
+        const quote = history[1]!.result as {
+          id: string;
+          amount_minor: number;
+        };
+        assert.equal(quote.amount_minor, 799);
+        return {
+          id,
+          name: "prepare_proposal",
+          arguments: {
+            quote_id: quote.id,
+            rationale: "One month using the current service quote.",
+            sources: [],
+            condition_under_minor: null,
+          },
+        };
+      }
+      assert(
+        !("error" in (history[2]!.result as object)),
+        JSON.stringify(history[2]!.result),
+      );
+      assert.equal(
+        (history[2]!.result as { status: string }).status,
+        "NEEDS_APPROVAL",
+      );
+      return {
+        id,
+        name: "finish",
+        arguments: {
+          answer: "The current quote is ready for your review.",
+          sources: [],
+        },
+      };
+    },
+  });
   try {
-    const found = await f.app.ask("owner", "I want to watch The Lantern Coast");
-    assert.equal(found.type, "options");
-    assert("options" in found);
-    assert.deepEqual(
-      found.options.map((option) => option.id),
-      ["harbor-play", "lantern-cinema", "coast-screen"],
+    const actor = f.store.createAgent("owner", {
+      name: "Research",
+      purpose:
+        "Compare supported service options and prepare a proposal for review",
+    });
+    const assigned = f.store.wallet("owner", f.wallet.id);
+    assigned.agent_id = actor.id;
+    f.store.saveWallet(assigned);
+    const found = await f.app.ask(
+      "owner",
+      "Prepare a current quote for a month of streaming, for my review",
+      actor.id,
     );
+    assert.equal(found.type, "proposal");
+    assert("proposal" in found);
+    assert.equal(found.proposal.amount, 799);
+    assert.equal(
+      found.proposal.owner_request,
+      "Prepare a current quote for a month of streaming, for my review",
+    );
+    assert.equal(found.proposal.status, "NEEDS_APPROVAL");
+    assert.equal(found.proposal.capture_id, null);
+    assert("steps" in found);
+    assert.deepEqual(found.steps, [
+      "list_services",
+      "get_quote",
+      "prepare_proposal",
+    ]);
     assert.equal(f.charges(), 0);
-    intent.film_title = "A Film Not In This Catalogue";
-    const absent = await f.app.ask("owner", "I want a different film");
-    assert.equal(absent.type, "answer");
-    assert(
-      "answer" in absent && /No supported fixture service/.test(absent.answer),
-    );
-    intent.film_title = null;
-    const missing = await f.app.ask("owner", "I want to watch a film");
-    assert("answer" in missing && /Which film/.test(missing.answer));
-    assert.equal(f.store.proposals("owner").length, 0);
   } finally {
     await f.close();
   }
 });
+test("fresh review expires only this agent's undispatched quotes and retains uncertain payment records", async () => {
+  const f = await fixture({
+    turn: async () => ({
+      id: "done",
+      name: "finish",
+      arguments: { answer: "Review checked; no action executed.", sources: [] },
+    }),
+  });
+  try {
+    const actor = f.store.createAgent("owner", {
+      name: "Reviewer",
+      purpose: "Review current service terms",
+    });
+    actor.email = f.wallet.email;
+    f.store.saveAgent(actor);
+    const p = await f.app.propose("owner", "coast-screen", "subscribe", {
+      agent_id: actor.id,
+      owner_request: "One month, under USD 10, for review.",
+    });
+    const other = f.store.createAgent("owner", {
+      name: "Other",
+      purpose: "Separate purchases",
+    });
+    const unrelated = await f.app.propose("owner", "basil-market", "buy", {
+      agent_id: other.id,
+    });
+    const pending = {
+      ...p,
+      id: "uncertain-payment",
+      status: "RECONCILING" as const,
+      reserved: 799,
+      merchant_action_id: "existing-action",
+      paypal_order_id: "existing-order",
+    };
+    f.store.saveProposal(pending);
+    f.advanceTo("2026-11-11T12:10:00Z");
+    await f.app.ask("owner", p.owner_request!, actor.id);
+    assert.equal(f.store.proposal("owner", p.id).status, "EXPIRED");
+    assert.equal(
+      f.store.proposal("owner", unrelated.id).status,
+      "NEEDS_APPROVAL",
+    );
+    assert.equal(f.store.proposal("owner", pending.id).status, "RECONCILING");
+    assert.equal(f.store.proposal("owner", pending.id).reserved, 799);
+    assert.equal(f.charges(), 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("reviewed project closeout verifies per-service outcomes, retains costs and isolates another agent", async () => {
+  const f = await fixture();
+  try {
+    const dev = f.store.createAgent("owner", {
+      name: "Dev",
+      purpose: "Manage services for a project",
+    });
+    dev.email = "dev@example.test";
+    dev.inbox_id = "fixture-dev";
+    f.store.saveAgent(dev);
+    const paid = [];
+    for (const serviceId of ["forge-build", "beacon-logs"]) {
+      const service = catalogue.services.find((s) => s.id === serviceId)!;
+      const wallet = f.store.ensureWallet("owner", service);
+      wallet.agent_id = dev.id;
+      wallet.email = dev.email;
+      wallet.inbox_id = dev.inbox_id;
+      wallet.vault_id = "fixture-vault-token";
+      wallet.mode = "ask";
+      f.store.saveWallet(wallet);
+      const p = await f.app.propose("owner", serviceId, "subscribe", {
+        agent_id: dev.id,
+      });
+      await f.app.approve("owner", p.id);
+      paid.push(f.store.proposal("owner", p.id));
+    }
+    const reel = f.store.createAgent("owner", {
+      name: "Reel",
+      purpose: "Separate personal service",
+    });
+    reel.email = "reel@example.test";
+    reel.inbox_id = "fixture-reel";
+    f.store.saveAgent(reel);
+    const separate = f.store.wallet("owner", f.wallet.id);
+    separate.agent_id = reel.id;
+    separate.email = reel.email;
+    f.store.saveWallet(separate);
+    const personal = await f.app.propose("owner", "coast-screen", "subscribe", {
+      agent_id: reel.id,
+    });
+    await f.app.approve("owner", personal.id);
+    assert.equal(f.charges(), 3);
+    let failBeacon = true;
+    const cancellations = new Map<string, number>();
+    const rpc: typeof merchantTool<Action> = async (service, name, args) => {
+      if (name === "cancel") {
+        cancellations.set(service!, 1 + (cancellations.get(service!) ?? 0));
+        if (service === "beacon-logs" && failBeacon) {
+          failBeacon = false;
+          throw Error("Simulated temporary merchant failure");
+        }
+      }
+      return merchantTool<Action>(service, name, args);
+    };
+    await assert.rejects(
+      prepareCancellationReview(
+        f.store,
+        "owner",
+        dev.id,
+        [personal.id],
+        "immediate",
+        rpc,
+      ),
+      /not available/,
+    );
+    const review = await prepareCancellationReview(
+      f.store,
+      "owner",
+      dev.id,
+      paid.map((p) => p.id),
+      "immediate",
+      rpc,
+    );
+    assert.equal(review.status, "DRAFT");
+    assert.equal(cancellations.size, 0);
+    for (const p of paid)
+      assert.equal(
+        f.merchant.status(p.service_id, p.merchant_action_id!).status,
+        "ACTIVE",
+      );
+    await assert.rejects(
+      confirmCancellationReview(
+        f.store,
+        "owner",
+        review.id,
+        review.revision + 1,
+        rpc,
+      ),
+      /review changed/i,
+    );
+    assert.equal(cancellations.size, 0);
+    const first = await confirmCancellationReview(
+      f.store,
+      "owner",
+      review.id,
+      review.revision,
+      rpc,
+    );
+    assert.equal(first.status, "PARTIAL");
+    assert.deepEqual(
+      first.entries.map((e) => e.status),
+      ["ENDED", "NEEDS_REVIEW"],
+    );
+    assert.equal(
+      f.merchant.status(
+        "coast-screen",
+        f.store.proposal("owner", personal.id).merchant_action_id!,
+      ).status,
+      "ACTIVE",
+    );
+    const second = await confirmCancellationReview(
+      f.store,
+      "owner",
+      review.id,
+      first.revision,
+      rpc,
+    );
+    assert.equal(second.status, "COMPLETE");
+    assert(second.entries.every((e) => e.status === "ENDED"));
+    assert.equal(cancellations.get("forge-build"), 1);
+    assert.equal(cancellations.get("beacon-logs"), 2);
+    await confirmCancellationReview(
+      f.store,
+      "owner",
+      review.id,
+      second.revision,
+      rpc,
+    );
+    assert.equal(cancellations.get("forge-build"), 1);
+    assert.equal(f.charges(), 3);
+    assert.equal(
+      paid.reduce(
+        (sum, p) =>
+          sum +
+          f.store.publicWallet("owner", f.store.wallet("owner", p.wallet_id))
+            .spent,
+        0,
+      ),
+      1600,
+    );
+    assert(paid.every((p) => !f.store.wallet("owner", p.wallet_id).paused));
+    assert.equal(
+      f.merchant.outbox().filter((m) => m.type === "cancellation").length,
+      2,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("an agent total allowance constrains separate service wallets and cannot erase committed costs", async () => {
+  const f = await fixture();
+  try {
+    const agent = f.store.createAgent("owner", {
+      name: "Project",
+      purpose: "One bounded project",
+    });
+    agent.email = "project@example.test";
+    agent.inbox_id = "fixture-project";
+    f.store.saveAgent(agent);
+    let allowance = f.store.saveAgentAllowance("owner", agent.id, {
+      limit: 2500,
+      expires_at: "2026-12-11T12:00:00Z",
+      paused: false,
+      expected_revision: null,
+    });
+    const proposals = [];
+    for (const id of ["forge-build", "beacon-logs", "harbor-play"]) {
+      const w = f.store.ensureWallet(
+        "owner",
+        catalogue.services.find((s) => s.id === id)!,
+      );
+      w.agent_id = agent.id;
+      w.email = agent.email;
+      w.inbox_id = agent.inbox_id;
+      w.vault_id = "fixture-vault-token";
+      w.mode = "ask";
+      f.store.saveWallet(w);
+      proposals.push(
+        await f.app.propose("owner", id, "subscribe", { agent_id: agent.id }),
+      );
+    }
+    await f.app.approve("owner", proposals[0]!.id);
+    await f.app.approve("owner", proposals[1]!.id);
+    allowance = f.store.agentAllowance("owner", agent.id)!;
+    assert.equal(allowance.spent, 1600);
+    assert.equal(allowance.available, 900);
+    await assert.rejects(
+      f.app.approve("owner", proposals[2]!.id),
+      /total allowance/,
+    );
+    assert.equal(f.charges(), 2);
+    assert.equal(
+      f.store.proposal("owner", proposals[2]!.id).status,
+      "NEEDS_APPROVAL",
+    );
+    assert.throws(
+      () =>
+        f.store.saveAgentAllowance("owner", agent.id, {
+          limit: 1500,
+          expires_at: allowance.expires_at,
+          paused: false,
+          expected_revision: allowance.revision,
+        }),
+      /cannot erase/,
+    );
+    allowance = f.store.saveAgentAllowance("owner", agent.id, {
+      limit: 2500,
+      expires_at: allowance.expires_at,
+      paused: true,
+      expected_revision: allowance.revision,
+    });
+    await assert.rejects(f.app.approve("owner", proposals[2]!.id), /paused/);
+    allowance = f.store.saveAgentAllowance("owner", agent.id, {
+      limit: 2500,
+      expires_at: "2026-11-10T12:00:00Z",
+      paused: false,
+      expected_revision: allowance.revision,
+    });
+    await assert.rejects(
+      f.app.approve("owner", proposals[2]!.id),
+      /allowance expired/,
+    );
+    assert.equal(f.charges(), 2);
+    assert.equal(f.store.agentAllowance("owner", agent.id)!.spent, 1600);
+  } finally {
+    await f.close();
+  }
+});
+
+test("concurrent approvals cannot overspend one agent allowance across two services", async () => {
+  const f = await fixture();
+  try {
+    const agent = f.store.createAgent("owner", {
+      name: "Bounded",
+      purpose: "Shared allowance",
+    });
+    agent.email = "bounded@example.test";
+    agent.inbox_id = "fixture-bounded";
+    f.store.saveAgent(agent);
+    f.store.saveAgentAllowance("owner", agent.id, {
+      limit: 1200,
+      expires_at: "2026-12-11T12:00:00Z",
+      paused: false,
+      expected_revision: null,
+    });
+    const proposals = [];
+    for (const id of ["forge-build", "beacon-logs"]) {
+      const w = f.store.ensureWallet(
+        "owner",
+        catalogue.services.find((s) => s.id === id)!,
+      );
+      w.agent_id = agent.id;
+      w.email = agent.email;
+      w.inbox_id = agent.inbox_id;
+      w.vault_id = "fixture-vault-token";
+      w.mode = "ask";
+      f.store.saveWallet(w);
+      proposals.push(
+        await f.app.propose("owner", id, "subscribe", { agent_id: agent.id }),
+      );
+    }
+    const outcomes = await Promise.allSettled(
+      proposals.map((p) => f.app.approve("owner", p.id)),
+    );
+    assert.equal(outcomes.filter((r) => r.status === "fulfilled").length, 1);
+    assert.equal(f.charges(), 1);
+    const allowance = f.store.agentAllowance("owner", agent.id)!;
+    assert(allowance.spent <= 1200);
+    assert.equal(allowance.reserved, 0);
+    const unpaid = f.store.proposals("owner").find((p) => p.status !== "PAID");
+    assert.equal(
+      unpaid?.status,
+      "NEEDS_APPROVAL",
+      "the rejected approval must remain reviewable by the owner",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test("consumer proposal uses real MCP, minimal PayPal response, independent merchant verification and one ledger debit", async () => {
   const f = await fixture();
   try {
@@ -233,6 +645,140 @@ test("consumer proposal uses real MCP, minimal PayPal response, independent merc
     await f.close();
   }
 });
+
+test("managed-service inspection verifies access, identity, confirmation and budget without another payment", async () => {
+  const f = await fixture();
+  try {
+    const agent = f.store.createAgent("owner", {
+      name: "Media",
+      purpose: "Keep my services and receipts together",
+    });
+    agent.email = "media@example.test";
+    agent.inbox_id = "fixture-inbox";
+    agent.status = "connected";
+    f.store.saveAgent(agent);
+    const wallet = f.store.wallet("owner", f.wallet.id);
+    wallet.agent_id = agent.id;
+    wallet.email = agent.email;
+    wallet.inbox_id = agent.inbox_id;
+    f.store.saveWallet(wallet);
+    const proposal = await f.app.propose("owner", "coast-screen", "subscribe", {
+      agent_id: agent.id,
+    });
+    const pending = await managedServiceStatus(
+      f.store,
+      "owner",
+      agent.id,
+      proposal.id,
+    );
+    assert.equal(pending.payment_confirmed, false);
+    assert.equal(pending.merchant_status, null);
+    await f.app.approve("owner", proposal.id);
+    const paid = f.store.proposal("owner", proposal.id);
+    assert.equal(f.charges(), 1);
+    const receipt = f.merchant.outbox()[0]!;
+    assert.equal(receipt.attachments?.length, 1);
+    const invoice = Buffer.from(
+      receipt.attachments![0]!.content_base64,
+      "base64",
+    ).toString("utf8");
+    assert(invoice.includes(agent.email!));
+    assert(invoice.includes(paid.merchant_action_id!));
+    assert(invoice.includes("USD 7.99"));
+    assert(invoice.includes(paid.capture_id!));
+    f.store.saveMessage({
+      id: "received-confirmation",
+      owner: "owner",
+      agent_id: agent.id,
+      service_id: paid.service_id,
+      provider_id: "fixture-confirmation",
+      subject: receipt.subject,
+      from: "Merchant <receipt@example.test>",
+      recipients: [agent.email!],
+      text: receipt.text,
+      received_at: "2026-11-11T12:00:00Z",
+      kind: "confirmation",
+      facts: {
+        item: paid.title,
+        amount_minor: paid.amount,
+        currency: "USD",
+        expires: paid.period_end,
+        action_id: paid.merchant_action_id,
+        suspicious: false,
+      },
+      origin: "agentmail",
+    });
+    const services = managedServices(f.store, "owner", agent.id);
+    assert.equal(services.length, 1);
+    assert.equal(services[0]!.actions[0]!.has_verified_capture, true);
+    const status = await managedServiceStatus(
+      f.store,
+      "owner",
+      agent.id,
+      proposal.id,
+    );
+    assert.equal(status.payment_confirmed, true);
+    assert.equal(status.identity_verified, true);
+    assert.equal(status.access_active, true);
+    assert.equal(status.wallet.spent, 799);
+    assert.equal(status.wallet.reserved, 0);
+    assert.deepEqual(status.received_confirmation_sources, [
+      "received-confirmation",
+    ]);
+    const matched = await checkConfirmation(
+      f.store,
+      "owner",
+      agent.id,
+      "received-confirmation",
+    );
+    assert.equal(matched.status, "matched");
+    assert("payment" in matched && matched.payment.payment_confirmed);
+    assert.equal(f.charges(), 1);
+    const other = f.store.createAgent("owner", {
+      name: "Other",
+      purpose: "Unrelated",
+    });
+    let called = false;
+    await assert.rejects(
+      managedServiceStatus(
+        f.store,
+        "owner",
+        other.id,
+        proposal.id,
+        async () => {
+          called = true;
+          throw Error("Must not call");
+        },
+      ),
+      /not available/,
+    );
+    assert.equal(called, false);
+    assert.deepEqual(managedServices(f.store, "owner", other.id), []);
+    const raw = f.merchant.status(paid.service_id, paid.merchant_action_id!);
+    const wrongAlias = await managedServiceStatus(
+      f.store,
+      "owner",
+      agent.id,
+      proposal.id,
+      async () => ({ ...raw, address: "unrelated@example.test" }),
+    );
+    assert.equal(wrongAlias.identity_verified, false);
+    assert.equal(wrongAlias.access_active, false);
+    f.advanceTo("2026-12-12T12:00:00Z");
+    const ended = await managedServiceStatus(
+      f.store,
+      "owner",
+      agent.id,
+      proposal.id,
+    );
+    assert.equal(ended.payment_confirmed, true);
+    assert.equal(ended.access_active, false);
+    assert.equal(ended.merchant_status, "CANCELED");
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
 test("a subscription can belong to any user-chosen agent and keeps that agent's alias through payment", async () => {
   const f = await fixture();
   try {
@@ -253,6 +799,20 @@ test("a subscription can belong to any user-chosen agent and keeps that agent's 
       f.store.wallet("owner", proposal.wallet_id).agent_id,
       agent.id,
     );
+    assert.notEqual(proposal.wallet_id, f.wallet.id);
+    const fresh = f.store.wallet("owner", proposal.wallet_id);
+    assert.equal(fresh.vault_id, null);
+    assert.equal(fresh.mode, "draft");
+    await assert.rejects(
+      f.app.approve("owner", proposal.id),
+      /Choose Ask every time/,
+    );
+    // This identity grants its own test permission; the existing wallet is untouched.
+    fresh.email = agent.email;
+    fresh.inbox_id = agent.inbox_id;
+    fresh.mode = "ask";
+    fresh.vault_id = "separately-approved-fixture-token";
+    f.store.saveWallet(fresh);
     await f.app.approve("owner", proposal.id);
     const paid = f.store.proposal("owner", proposal.id);
     assert.equal(paid.status, "PAID");
@@ -334,6 +894,40 @@ test("a canceled historical subscription cannot mark a new paid month canceled",
     await f.close();
   }
 });
+test("linked verified history can be read but cannot acquire local execution authority", async () => {
+  const f = await fixture();
+  try {
+    const service = catalogue.services.find((s) => s.id === "coast-screen")!;
+    const w = f.store.ensureWallet("owner", service);
+    w.mode = "ask";
+    w.vault_id = "fixture-vault-token";
+    w.email = "owner@example.test";
+    f.store.saveWallet(w);
+    const p = await f.app.propose("owner", service.id, "subscribe");
+    await f.app.approve("owner", p.id);
+    const paid = f.store.proposal("owner", p.id);
+    paid.history_source = {
+      base_url: process.env.MOCK_MERCHANT_URL!,
+      owner_id: "original-owner",
+      wallet_id: "original-wallet",
+      imported_at: f.store.now().toISOString(),
+    };
+    f.store.saveProposal(paid);
+    const currentHost = process.env.MOCK_MERCHANT_URL;
+    process.env.MOCK_MERCHANT_URL = "http://127.0.0.1:1";
+    await f.app.sync("owner");
+    process.env.MOCK_MERCHANT_URL = currentHost;
+    assert.equal(f.charges(), 1);
+    await assert.rejects(f.app.cancel("owner", paid.id), /read-only/);
+    paid.status = "APPROVED";
+    f.store.saveProposal(paid);
+    await assert.rejects(f.app.pay("owner", paid.id), /read-only/);
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
+
 test("coffee and dining execute exact paid actions through the consumer orchestrator", async () => {
   const f = await fixture();
   try {
@@ -438,18 +1032,10 @@ test("a digest sorts one agent's messages and a reply goes out once, only to a d
       ].every((line) => line.message.id !== blocked.id),
       "a blocked message is never quoted in a digest",
     );
-    assert.deepEqual(
-      await f.app.ask("owner", "What's new?", "digest", table.id),
-      { type: "digest", engine: "rules" },
-    );
-    const drafted = (await f.app.ask("owner", "Reply", "reply", table.id)) as {
-      type: string;
-      draft: { message_id: string; body: string; to_name: string };
-    };
-    assert.equal(drafted.type, "reply");
-    assert.equal(drafted.draft.to_name, "Marina Table");
-    assert.equal(sent.length, 0, "drafting sends nothing");
-    const id = drafted.draft.message_id;
+    const id = state.messages.find(
+      (message) => message.agent_id === table.id && !message.facts.suspicious,
+    )!.id;
+    assert.equal(sent.length, 0);
     await assert.rejects(
       f.app.sendReply("owner", id, "Please move Friday to 8 pm.", "r1"),
       /address before it can reply/,
@@ -467,6 +1053,7 @@ test("a digest sorts one agent's messages and a reply goes out once, only to a d
       ...message,
       origin: "agentmail",
       provider_id: "table@example.test:provider-1",
+      reply_to: [],
       from: "Marina Table <hello@marina.example>",
     });
     await assert.rejects(
@@ -524,6 +1111,486 @@ test("an approved pet-food rule uses a strict threshold and fires exactly once",
     await f.close();
   }
 });
+async function monthlyRule(
+  f: Awaited<ReturnType<typeof fixture>>,
+  serviceId = "daily-paws",
+  quantity = 1,
+  maxAmount = 3000,
+) {
+  const agent = f.store.createAgent("owner", {
+    name: "Restock",
+    purpose: "Monthly exact-item household purchases",
+  });
+  agent.email = "restock@example.test";
+  agent.inbox_id = agent.email;
+  agent.status = "connected";
+  f.store.saveAgent(agent);
+  const wallet = f.store.ensureWallet(
+    "owner",
+    (await f.app.services()).find((s) => s.id === serviceId)!,
+  );
+  Object.assign(wallet, {
+    agent_id: agent.id,
+    email: agent.email,
+    inbox_id: agent.inbox_id,
+    mode: "auto",
+    auto_under: 3000,
+    per_action: 5000,
+    cap: 10000,
+    period: "month",
+    timezone: "Asia/Dubai",
+    expires_at: "2027-04-01T00:00:00Z",
+    vault_id: "fixture-restock-token",
+  });
+  f.store.saveWallet(wallet);
+  const p = await f.app.propose("owner", serviceId, "schedule", {
+    agent_id: agent.id,
+    quantity,
+    monthly_schedule: {
+      timezone: "Asia/Dubai",
+      day_of_month: 12,
+      local_time: "09:00",
+      starts_at: "2026-11-12T05:00:00Z",
+      expires_at: "2027-02-13T05:00:00Z",
+      max_amount_minor: maxAmount,
+      price_inclusive: false,
+    },
+  });
+  return { agent, wallet, p };
+}
+
+test("monthly owner approval schedules an exact item and two concurrent ticks create one order in each new month", async () => {
+  const f = await fixture();
+  try {
+    const { p, wallet } = await monthlyRule(f);
+    f.store.saveAgentAllowance("owner", p.agent_id!, {
+      limit: 6500,
+      expires_at: "2027-04-01T00:00:00Z",
+      paused: false,
+      expected_revision: null,
+    });
+    const result = await f.app.approve("owner", p.id, {
+      revision: wallet.revision,
+      cap: wallet.cap,
+      per_action: wallet.per_action,
+      auto_under: wallet.auto_under,
+      daily_limit: wallet.daily_limit,
+      mode: "auto",
+      period: "month",
+      timezone: wallet.timezone,
+      expires_at: wallet.expires_at,
+    });
+    assert.equal(result.type, "proposal");
+    assert.equal(f.charges(), 0);
+    assert.equal(f.store.proposal("owner", p.id).status, "WAITING");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 0);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await Promise.all([
+      f.app.evaluateSchedules("owner"),
+      f.app.evaluateSchedules("owner"),
+    ]);
+    assert.equal(f.charges(), 1);
+    let children = f.store
+      .proposals("owner")
+      .filter((c) => c.scheduled_by?.proposal_id === p.id);
+    assert.equal(children.length, 1);
+    assert.equal(children[0]!.status, "PAID");
+    assert.equal(children[0]!.scheduled_by!.period, "2026-11");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 1);
+    f.advanceTo("2026-12-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 2);
+    assert.equal(f.merchant.outbox().length, 2);
+    assert.equal(f.store.agentAllowance("owner", p.agent_id!)!.spent, 5998);
+    assert.equal(f.store.agentAllowance("owner", p.agent_id!)!.reserved, 0);
+    children = f.store
+      .proposals("owner")
+      .filter((c) => c.scheduled_by?.proposal_id === p.id);
+    assert.deepEqual(children.map((c) => c.scheduled_by!.period).sort(), [
+      "2026-11",
+      "2026-12",
+    ]);
+    assert(
+      children.every(
+        (c) =>
+          c.item_id === p.item_id &&
+          c.quantity === 1 &&
+          c.agent_id === p.agent_id,
+      ),
+    );
+    assert.equal(f.store.wallet("owner", f.wallet.id).status, "draft");
+    f.advanceTo("2027-01-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 2);
+    assert.equal(f.store.proposal("owner", p.id).status, "NEEDS_APPROVAL");
+  } finally {
+    await f.close();
+  }
+});
+
+test("lost monthly capture response survives a reopened store and reconciles the same purchase exactly once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mailbox-monthly-")),
+    path = join(dir, "app.sqlite");
+  const f = await fixture({ loseFirstResponse: true, appPath: path });
+  let reopened: AppStore | undefined;
+  try {
+    const { p } = await monthlyRule(f);
+    await f.app.approve("owner", p.id);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    const child = f.store
+      .proposals("owner")
+      .find((c) => c.scheduled_by?.proposal_id === p.id)!;
+    assert.equal(child.status, "RECONCILING");
+    assert.equal(child.reserved, 2999);
+    assert.equal(f.charges(), 1);
+    reopened = new AppStore(path, f.store.now, f.store.vaultSecret);
+    const app = new AppService(reopened, new PayPal(f.request), f.app.mail);
+    await app.evaluateSchedules("owner");
+    await app.evaluateSchedules("owner");
+    assert.equal(reopened.proposal("owner", child.id).status, "PAID");
+    assert.equal(reopened.proposal("owner", child.id).reserved, 0);
+    assert.equal(f.charges(), 1);
+  } finally {
+    reopened?.close();
+    await f.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("monthly exceptions stop automatic orders for higher prices, changed variants, stock, expiry and identity", async () => {
+  const changes = [
+    (f: Awaited<ReturnType<typeof fixture>>) => {
+      f.merchant.serviceById("daily-paws").items[0]!.amount_minor = 3000;
+    },
+    (f: Awaited<ReturnType<typeof fixture>>) => {
+      f.merchant.serviceById("daily-paws").items[0]!.name = "Different flavour";
+    },
+    (f: Awaited<ReturnType<typeof fixture>>) => {
+      f.merchant.serviceById("daily-paws").items[0]!.in_stock = false;
+    },
+    (f: Awaited<ReturnType<typeof fixture>>, w: string) => {
+      const wallet = f.store.wallet("owner", w);
+      wallet.expires_at = "2026-11-12T04:00:00Z";
+      f.store.saveWallet(wallet);
+    },
+    (f: Awaited<ReturnType<typeof fixture>>, w: string) => {
+      const wallet = f.store.wallet("owner", w);
+      wallet.auto_under = 2000;
+      f.store.saveWallet(wallet);
+    },
+    (f: Awaited<ReturnType<typeof fixture>>, w: string) => {
+      const wallet = f.store.wallet("owner", w);
+      const a = f.store.agent("owner", wallet.agent_id!);
+      a.email = "changed@example.test";
+      f.store.saveAgent(a);
+    },
+  ];
+  for (const change of changes) {
+    const f = await fixture();
+    try {
+      const { p, wallet } = await monthlyRule(f);
+      await f.app.approve("owner", p.id);
+      change(f, wallet.id);
+      f.advanceTo("2026-11-12T05:00:00Z");
+      await f.app.evaluateSchedules("owner");
+      await f.app.evaluateSchedules("owner");
+      assert.equal(f.charges(), 0);
+      assert.equal(f.store.proposal("owner", p.id).status, "NEEDS_APPROVAL");
+      assert.equal(f.merchant.outbox().length, 0);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("replacing a monthly rule cannot order the same product twice in its current period", async () => {
+  const f = await fixture();
+  try {
+    const { p } = await monthlyRule(f);
+    await f.app.approve("owner", p.id);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 1);
+    f.app.decline("owner", p.id);
+    const {
+      item: _item,
+      approved_at: _approved,
+      ...input
+    } = p.monthly_schedule!;
+    const replacement = await f.app.propose("owner", p.service_id, "schedule", {
+      agent_id: p.agent_id!,
+      item_id: p.item_id,
+      quantity: p.quantity,
+      monthly_schedule: input,
+    });
+    await f.app.approve("owner", replacement.id);
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 1);
+    const state = f.app.state("owner");
+    assert.equal(
+      state.proposals.find((c) => c.id === replacement.id)!.next_scheduled_at,
+      "2026-12-12T05:00:00.000Z",
+    );
+    f.advanceTo("2026-12-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("stopping a monthly rule between its quote and reservation prevents dispatch", async () => {
+  const f = await fixture();
+  try {
+    const { p } = await monthlyRule(f);
+    await f.app.approve("owner", p.id);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    const pay = f.app.pay.bind(f.app);
+    f.app.pay = async (owner, id) => {
+      f.app.decline(owner, p.id);
+      return pay(owner, id);
+    };
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 0);
+    assert.equal(f.store.proposal("owner", p.id).status, "DECLINED");
+    assert(
+      f.store
+        .proposals("owner")
+        .filter((c) => c.scheduled_by?.proposal_id === p.id)
+        .every((c) => c.status === "BLOCKED"),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("a merchant rejection after a fresh quote pauses the monthly rule for review", async () => {
+  const f = await fixture();
+  try {
+    const { p, wallet } = await monthlyRule(f);
+    await f.app.approve("owner", p.id);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    let attempts = 0;
+    f.merchant.prepare = () => {
+      attempts++;
+      throw new MerchantError(
+        "OUT_OF_STOCK",
+        "Stock changed before the order could be placed.",
+      );
+    };
+    await f.app.evaluateSchedules("owner");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(attempts, 1);
+    assert.equal(f.charges(), 0);
+    assert.equal(f.store.proposal("owner", p.id).status, "NEEDS_APPROVAL");
+    assert.equal(
+      f.store.publicWallet("owner", f.store.wallet("owner", wallet.id))
+        .reserved,
+      0,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("stopping a monthly rule retains and reconciles an already dispatched payment without another order", async () => {
+  const f = await fixture({ loseFirstResponse: true });
+  try {
+    const { p } = await monthlyRule(f);
+    await f.app.approve("owner", p.id);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 1);
+    const child = f.store
+      .proposals("owner")
+      .find((c) => c.scheduled_by?.proposal_id === p.id)!;
+    assert.equal(child.status, "RECONCILING");
+    f.app.decline("owner", p.id);
+    await f.app.sync("owner");
+    assert.equal(f.store.proposal("owner", child.id).status, "PAID");
+    assert.equal(f.charges(), 1);
+    f.advanceTo("2026-12-12T05:00:00Z");
+    await f.app.sync("owner");
+    assert.equal(f.charges(), 1);
+    assert.equal(f.store.proposal("owner", p.id).status, "DECLINED");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a newly configured merchant uses discovery, monthly purchase and scoped confirmation without client scenario code", async () => {
+  const service = createService({
+    id: "atelier-supply",
+    name: "Atelier Supply",
+    category: "household",
+    paypalMerchant: catalogue.services[0]!.paypalMerchant,
+    catalogue: [
+      {
+        id: "soap-200",
+        name: "Cedar soap, 200 ml",
+        amount_minor: 850,
+        period: "once",
+        terms: "Delivered total including tax",
+        in_stock: true,
+        unit: "ml",
+        unit_quantity: 200,
+        comparison_group: "cedar-soap",
+      },
+    ],
+  });
+  const f = await fixture({ services: [...catalogue.services, service] });
+  try {
+    const { p, agent } = await monthlyRule(f, service.id);
+    await f.app.approve("owner", p.id);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    const child = f.store
+      .proposals("owner")
+      .find((c) => c.scheduled_by?.proposal_id === p.id)!;
+    assert.equal(child.status, "PAID");
+    assert.equal(child.amount, 850);
+    const receipt = f.merchant.outbox()[0]!,
+      facts = await extractEmail(receipt.subject, receipt.text);
+    const assigned = [{ id: service.id, name: service.name }];
+    assert.notEqual(
+      incomingService(receipt.text, service.name).service_id,
+      service.id,
+    );
+    const identified = incomingService(
+      receipt.text,
+      service.name,
+      undefined,
+      assigned,
+    );
+    assert.equal(identified.service_id, service.id);
+    f.store.saveMessage({
+      id: "new-merchant-receipt",
+      owner: "owner",
+      agent_id: agent.id,
+      service_id: identified.service_id,
+      provider_id: `${agent.inbox_id}:receipt-1`,
+      subject: receipt.subject,
+      from: service.name,
+      recipients: [agent.email!],
+      text: receipt.text,
+      received_at: f.store.now().toISOString(),
+      kind: facts.kind,
+      facts,
+      origin: "agentmail",
+    });
+    const matched = await checkConfirmation(
+      f.store,
+      "owner",
+      agent.id,
+      "new-merchant-receipt",
+    );
+    assert.equal(matched.status, "matched");
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a future monthly price boundary can be lower than today's quote without granting payment above it", async () => {
+  const f = await fixture();
+  try {
+    const { p, wallet } = await monthlyRule(f, "daily-paws", 1, 2500);
+    const w = f.store.wallet("owner", wallet.id);
+    w.auto_under = 2500;
+    w.per_action = 2500;
+    f.store.saveWallet(w);
+    await f.app.approve("owner", p.id);
+    assert.equal(f.charges(), 0);
+    f.merchant.serviceById("daily-paws").items[0]!.amount_minor = 2450;
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    const child = f.store
+      .proposals("owner")
+      .find((c) => c.scheduled_by?.proposal_id === p.id)!;
+    assert.equal(child.status, "PAID");
+    assert.equal(child.amount, 2450);
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a changed current price within the monthly boundary uses the fresh delivered total", async () => {
+  const f = await fixture();
+  try {
+    const { p } = await monthlyRule(f);
+    await f.app.approve("owner", p.id);
+    const item = f.merchant.serviceById("daily-paws").items[0]!;
+    item.amount_minor = 2899;
+    item.terms = "USD 28.99 for this exact item, tax and delivery included.";
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    const child = f.store
+      .proposals("owner")
+      .find((c) => c.scheduled_by?.proposal_id === p.id)!;
+    assert.equal(child.amount, 2899);
+    assert.equal(child.status, "PAID");
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the same monthly capability orders an unrelated product and exact quantity without new scenario code", async () => {
+  const f = await fixture();
+  try {
+    const { p } = await monthlyRule(f, "basil-market", 2);
+    await f.app.approve("owner", p.id);
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    const child = f.store
+      .proposals("owner")
+      .find((c) => c.scheduled_by?.proposal_id === p.id)!;
+    assert.equal(child.status, "PAID");
+    assert.equal(child.quantity, 2);
+    assert.equal(child.amount, 1300);
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("connecting saved payment consent arms the approved monthly rule without charging immediately", async () => {
+  const f = await fixture();
+  try {
+    const { p, wallet } = await monthlyRule(f);
+    const w = f.store.wallet("owner", wallet.id);
+    w.vault_id = null;
+    f.store.saveWallet(w);
+    f.app.paypal.setup = async () => ({
+      id: "setup-monthly",
+      links: [
+        { rel: "approve", href: "https://www.sandbox.paypal.com/approval" },
+      ],
+    });
+    f.app.paypal.exchange = async () => "owner-consented-test-token";
+    const redirect = await f.app.approve("owner", p.id);
+    assert.equal(redirect.type, "redirect");
+    assert("url" in redirect);
+    const setupRows = f.store.db.prepare("SELECT id FROM setup").all();
+    assert.equal(setupRows.length, 1);
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 0);
+    await f.app.finishSetup("owner", setupRows[0]!.id as string);
+    assert.equal(f.charges(), 0);
+    assert.equal(f.store.proposal("owner", p.id).status, "WAITING");
+    f.advanceTo("2026-11-12T05:00:00Z");
+    await f.app.evaluateSchedules("owner");
+    assert.equal(f.charges(), 1);
+  } finally {
+    await f.close();
+  }
+});
+
 test("wallet pause during provider work survives payment completion", async () => {
   const f = await fixture();
   try {

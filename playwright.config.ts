@@ -3,16 +3,22 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const data = mkdtempSync(join(tmpdir(), "mailbox-browser-"));
-const origin = "http://127.0.0.1:3400";
-const sharedOrigin = "http://127.0.0.1:3401";
+const port = Number(process.env.MAILBOX_BROWSER_PORT ?? 3400);
+const origin = `http://127.0.0.1:${port}`;
+const sharedOrigin = `http://127.0.0.1:${port + 1}`;
+const agentOrigin = `http://127.0.0.1:${port + 2}`;
+const buildDir = process.env.MAILBOX_BROWSER_BUILD_DIR ?? ".next-qa";
 const isolatedServer = {
-  command: "npm run start:web -- --port 3400 --hostname 127.0.0.1",
+  command: `npm run start:web -- --port ${port} --hostname 127.0.0.1`,
   url: origin,
   reuseExistingServer: false,
   timeout: 60000,
   env: {
     NODE_ENV: "production",
-    MAILBOX_BUILD_DIR: ".next-qa",
+    // Legacy hosted settings must no longer disable the dashboard.
+    MAILBOX_ENABLE_AG_STUDIO: "false",
+    NEXT_PUBLIC_AG_STUDIO_LICENSE_KEY: "",
+    MAILBOX_BUILD_DIR: buildDir,
     MAILBOX_RUN_WORKER: "0",
     APP_URL: origin,
     MOCK_MERCHANT_URL: origin,
@@ -38,6 +44,7 @@ const isolatedServer = {
 };
 export default defineConfig({
   testDir: "browser-tests",
+  outputDir: process.env.MAILBOX_BROWSER_OUTPUT_DIR ?? join(data, "results"),
   fullyParallel: false,
   workers: 1,
   timeout: 30000,
@@ -52,6 +59,11 @@ export default defineConfig({
   projects: [
     { name: "isolated", testMatch: "app.spec.ts" },
     {
+      name: "agent",
+      testMatch: /(?:agent|dashboard)\.spec\.ts/,
+      use: { baseURL: agentOrigin },
+    },
+    {
       name: "shared",
       testMatch: "shared.spec.ts",
       use: { baseURL: sharedOrigin },
@@ -61,7 +73,21 @@ export default defineConfig({
     isolatedServer,
     {
       ...isolatedServer,
-      command: "npm run start:web -- --port 3401 --hostname 127.0.0.1",
+      command: `npm run start:web -- --port ${port + 2} --hostname 127.0.0.1`,
+      url: agentOrigin,
+      env: {
+        ...isolatedServer.env,
+        APP_URL: agentOrigin,
+        MOCK_MERCHANT_URL: agentOrigin,
+        APP_DATABASE_PATH: join(data, "agent-app.sqlite"),
+        MOCK_DATABASE_PATH: join(data, "agent-merchant.sqlite"),
+        OPENAI_API_KEY: "fixture-agent-provider-key",
+        OPENAI_BASE_URL: `http://127.0.0.1:${port + 12}/v1`,
+      },
+    },
+    {
+      ...isolatedServer,
+      command: `npm run start:web -- --port ${port + 1} --hostname 127.0.0.1`,
       url: sharedOrigin,
       env: {
         ...isolatedServer.env,

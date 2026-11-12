@@ -109,6 +109,40 @@
       }
     },
     {
+      "id": "forge-build",
+      "name": "Forge Build",
+      "category": "developer-tools",
+      "kind": "subscription",
+      "description": "Fictional project build service with one project workspace, a current monthly quote, agent-email activation and supported immediate or period-end cancellation.",
+      "items": [
+        {
+          "id": "starter-month",
+          "name": "Forge Build Starter, one paid month",
+          "amount_minor": 900,
+          "period": "month",
+          "includes": ["One project workspace", "Private project builds"],
+          "terms": "One paid month, USD 9.00 total. Renewal disabled. Access normally ends at the billing-period end. Immediate cancellation ends access now with no refund; period-end cancellation retains access until that date. This is a fictional supported service."
+        }
+      ]
+    },
+    {
+      "id": "beacon-logs",
+      "name": "Beacon Logs",
+      "category": "developer-tools",
+      "kind": "subscription",
+      "description": "Fictional project log-monitoring service with current quotes, activation under the chosen agent email and supported immediate or period-end cancellation.",
+      "items": [
+        {
+          "id": "project-month",
+          "name": "Beacon Logs Project, one paid month",
+          "amount_minor": 700,
+          "period": "month",
+          "includes": ["One project workspace", "Project log monitoring"],
+          "terms": "One paid month, USD 7.00 total. Renewal disabled. Access normally ends at the billing-period end. Immediate cancellation ends access now with no refund; period-end cancellation retains access until that date. This is a fictional supported service."
+        }
+      ]
+    },
+    {
       "id": "daily-paws",
       "name": "Daily Paws",
       "category": "pets",

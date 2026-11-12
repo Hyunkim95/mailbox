@@ -19,8 +19,14 @@ import {
   syncAgentInbox,
 } from "../../../src/email";
 import { seedMessages } from "../../../src/seed";
+import { replaceMissingAgentAddress } from "../../../src/replace-agent-address";
 import { searchMarket } from "../../../src/market";
 import { studioTurn } from "../../../src/studio-model";
+import {
+  importDocument,
+  readBoundedBody,
+  MAX_DOCUMENT_BYTES,
+} from "../../../src/documents";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ route: string[] }> };
@@ -42,6 +48,7 @@ const commandSchema = z.object({
     "market_search",
     "create_agent",
     "connect_agent",
+    "replace_agent_address",
     "update_agent",
     "studio_turn",
     "studio_save",
@@ -51,6 +58,10 @@ const commandSchema = z.object({
     "pay_invoice",
     "dismiss_message",
     "send_reply",
+    "discard_reply",
+    "confirm_cancellations",
+    "discard_cancellations",
+    "set_agent_allowance",
     "rules",
     "pause",
     "revoke",
@@ -64,8 +75,20 @@ const commandSchema = z.object({
     "logout",
   ]),
   text: z.string().max(1500).optional(),
+  expected_address: z.string().email().optional(),
   body: z.string().max(4000).optional(),
-  example: z.string().optional(),
+  document_ids: z.array(z.string()).max(8).optional(),
+  draft_id: z.string().uuid().optional(),
+  revision: z.number().int().positive().optional(),
+  allowance: z
+    .object({
+      limit: z.number().int().nonnegative().max(100_000_000),
+      expires_at: z.iso.datetime(),
+      paused: z.boolean(),
+      expected_revision: z.number().int().positive().nullable(),
+    })
+    .strict()
+    .optional(),
   id: z.string().optional(),
   service_id: z.string().optional(),
   kind: z.enum(["subscribe", "buy", "book", "condition"]).optional(),
@@ -140,7 +163,7 @@ async function owner() {
   if (!value)
     throw new MerchantError(
       "SIGN_IN_REQUIRED",
-      "Enter the private demo key to continue.",
+      "Enter the access key to continue.",
     );
   return value;
 }
@@ -158,6 +181,27 @@ export async function GET(request: NextRequest, context: Context) {
       }
       return response(appService().state(account));
     }
+    if (path.startsWith("documents/")) {
+      const account = await owner(),
+        segments = path.split("/");
+      const doc = appService().store.document(
+        account,
+        decodeURIComponent(segments[1]!),
+      );
+      if (segments[2] === "download")
+        return new NextResponse(
+          new Uint8Array(appService().store.documentContent(account, doc.id)),
+          {
+            headers: {
+              "Content-Type": doc.content_type,
+              "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(doc.filename)}`,
+              "X-Content-Type-Options": "nosniff",
+              "Cache-Control": "no-store",
+            },
+          },
+        );
+      return response({ document: doc });
+    }
     if (path === "services") {
       await owner();
       return response({
@@ -168,15 +212,6 @@ export async function GET(request: NextRequest, context: Context) {
     }
     if (path === "studio") {
       const account = await owner();
-      if (process.env.MAILBOX_ENABLE_AG_STUDIO === "false")
-        return response(
-          {
-            error: "DASHBOARD_UNAVAILABLE",
-            message:
-              "Dashboard customization is not available in this hosted demo.",
-          },
-          503,
-        );
       const agentId = request.nextUrl.searchParams.get("agent_id");
       if (agentId) {
         const agent = appService().store.agent(
@@ -249,6 +284,40 @@ export async function POST(request: NextRequest, context: Context) {
   try {
     const path = (await context.params).route.join("/"),
       service = appService();
+    if (path === "documents") {
+      const origin = request.headers.get("origin");
+      if (
+        origin &&
+        origin !== request.nextUrl.origin &&
+        origin !== process.env.APP_URL
+      )
+        return response({ error: "ORIGIN_NOT_ALLOWED" }, 403);
+      const account = await owner();
+      const bytes = await readBoundedBody(
+        request.body,
+        MAX_DOCUMENT_BYTES + 32768,
+      );
+      const form = await new Response(bytes.buffer as ArrayBuffer, {
+        headers: { "Content-Type": request.headers.get("content-type") ?? "" },
+      }).formData();
+      const agentId = z.string().uuid().parse(form.get("agent_id")),
+        file = form.get("file");
+      if (!(file instanceof File))
+        return response(
+          { error: "DOCUMENT_REQUIRED", message: "Choose a document to add." },
+          400,
+        );
+      const message = form.get("message_id");
+      const document = await importDocument(service.store, account, agentId, {
+        filename: file.name,
+        content_type: file.type || "application/octet-stream",
+        bytes: new Uint8Array(await file.arrayBuffer()),
+        ...(typeof message === "string" && message
+          ? { message_id: message }
+          : {}),
+      });
+      return response({ document });
+    }
     const raw = await request.text();
     if (raw.length > 262_144)
       return response({ error: "REQUEST_TOO_LARGE" }, 413);
@@ -324,7 +393,7 @@ export async function POST(request: NextRequest, context: Context) {
         return response(
           {
             error: "ACCESS_DENIED",
-            message: "That demo key was not accepted.",
+            message: "That access key was not accepted.",
           },
           401,
         );
@@ -348,18 +417,6 @@ export async function POST(request: NextRequest, context: Context) {
       return result;
     }
     const account = await owner();
-    if (
-      process.env.MAILBOX_ENABLE_AG_STUDIO === "false" &&
-      ["studio_turn", "studio_save"].includes(input.action)
-    )
-      return response(
-        {
-          error: "DASHBOARD_UNAVAILABLE",
-          message:
-            "Dashboard customization is not available in this hosted demo.",
-        },
-        503,
-      );
     if (input.action === "create_agent") {
       if (!input.name || !input.purpose)
         return response(
@@ -380,6 +437,16 @@ export async function POST(request: NextRequest, context: Context) {
         service.store.saveAgent(agent);
       }
       return response({ agent: service.store.publicAgent(agent) });
+    }
+    if (input.action === "replace_agent_address") {
+      return response({
+        agent: await replaceMissingAgentAddress(
+          service.store,
+          account,
+          z.string().uuid().parse(input.agent_id),
+          z.string().email().parse(input.expected_address),
+        ),
+      });
     }
     if (input.action === "connect_agent") {
       const agent = service.store.agent(
@@ -470,12 +537,7 @@ export async function POST(request: NextRequest, context: Context) {
     };
     if (input.action === "ask")
       return response(
-        await service.ask(
-          account,
-          input.text ?? "",
-          input.example,
-          input.agent_id,
-        ),
+        await service.ask(account, input.text ?? "", input.agent_id),
       );
     if (input.action === "propose") {
       if (!input.service_id)
@@ -502,6 +564,62 @@ export async function POST(request: NextRequest, context: Context) {
         type: "proposal",
         proposal: await service.payInvoice(account, id()),
       });
+    if (input.action === "set_agent_allowance") {
+      if (!input.allowance)
+        throw new MerchantError(
+          "INVALID_ALLOWANCE",
+          "Choose an allowance and expiry.",
+        );
+      return response({
+        allowance: service.store.saveAgentAllowance(
+          account,
+          z.string().uuid().parse(input.agent_id),
+          input.allowance,
+        ),
+      });
+    }
+    if (input.action === "confirm_cancellations") {
+      return response(
+        await service.confirmCancellations(
+          account,
+          z.string().uuid().parse(input.id),
+          z.number().int().positive().parse(input.revision),
+        ),
+      );
+    }
+    if (input.action === "discard_cancellations")
+      return response(
+        service.discardCancellations(
+          account,
+          z.string().uuid().parse(input.id),
+        ),
+      );
+    if (input.action === "discard_reply") {
+      const agent = service.store.agent(
+        account,
+        z.string().uuid().parse(input.agent_id),
+      );
+      const draft = service.store.setting<{ id?: string }>(
+        `agent-reply:${account}:${agent.id}`,
+      );
+      if (input.draft_id && draft?.id !== input.draft_id)
+        throw new MerchantError(
+          "DRAFT_CHANGED",
+          "This draft changed. Review the current draft before discarding.",
+        );
+      const attempted =
+        draft?.id &&
+        service.store.setting<{ sent_at?: string }>(
+          `reply-sent:${account}:${draft.id}`,
+        );
+      if (attempted && !attempted.sent_at)
+        throw new MerchantError(
+          "REPLY_PENDING",
+          "Resolve the original pending send before discarding this draft.",
+        );
+      service.store.setSetting(`agent-reply:${account}:${agent.id}`, null);
+      return response({ discarded: true });
+    }
     if (input.action === "send_reply")
       return response(
         await service.sendReply(
@@ -509,6 +627,8 @@ export async function POST(request: NextRequest, context: Context) {
           id(),
           input.body ?? "",
           input.request_id ?? randomUUID(),
+          input.document_ids ?? [],
+          input.draft_id,
         ),
       );
     if (input.action === "dismiss_message")

@@ -24,12 +24,7 @@
       }
     ],
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "paths": {
-      "@mailbox/dashboard": [
-        "./app/niche-dashboard.tsx"
-      ]
-    }
+    "allowImportingTsExtensions": true
   },
   "include": [
     "app/**/*.ts",
@@ -41,7 +36,19 @@
     ".next-qa/types/**/*.ts",
     ".next-qa/dev/types/**/*.ts",
     ".next-core/types/**/*.ts",
-    ".next-core/dev/types/**/*.ts"
+    ".next-core/dev/types/**/*.ts",
+    "artifacts/demo/next-review/types/**/*.ts",
+    "artifacts/demo/next-review/dev/types/**/*.ts",
+    "artifacts/staged-review/completion-build/types/**/*.ts",
+    "artifacts/staged-review/completion-build/dev/types/**/*.ts",
+    "artifacts/demo/connected-build/types/**/*.ts",
+    "artifacts/demo/connected-build/dev/types/**/*.ts",
+    "artifacts/dashboard/build/types/**/*.ts",
+    "artifacts/dashboard/build/dev/types/**/*.ts",
+    "artifacts/dashboard/final-build/types/**/*.ts",
+    "artifacts/dashboard/final-build/dev/types/**/*.ts",
+    "artifacts/pigeon/build/types/**/*.ts",
+    "artifacts/pigeon/build/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

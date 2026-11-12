@@ -85,6 +85,7 @@ export function needsYou(state: QueueState): Need[] {
   const approvals: Need[] = [];
   const mail: Need[] = [];
   state.agents.forEach((agent, agentIndex) => {
+    if (agent.archived_at) return;
     for (const proposal of state.proposals) {
       if (proposal.status !== "NEEDS_APPROVAL") continue;
       if (isDuplicateSubscription(state, proposal)) continue;

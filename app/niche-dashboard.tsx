@@ -153,7 +153,8 @@ function Canvas({
 }) {
   const api = useRef<AgStudioApi | null>(null),
     harness = useRef<AgAiHarness | null>(null),
-    session = useRef<AgAiChatSession | null>(null);
+    session = useRef<AgAiChatSession | null>(null),
+    cancelledSession = useRef<AgAiChatSession | null>(null);
   const [prompt, setPrompt] = useState(""),
     [busy, setBusy] = useState(false),
     [saving, setSaving] = useState(false),
@@ -202,7 +203,12 @@ function Canvas({
                 "bar-chart-grouped",
                 "line-chart",
                 "pie-chart",
-              ].map((widgetType) => tools.configureWidget({ widgetType })),
+              ].map((widgetType) =>
+                tools.configureWidget(
+                  { widgetType },
+                  { name: `configure_${widgetType.replaceAll("-", "_")}` },
+                ),
+              ),
             ],
           }),
         ],
@@ -227,7 +233,9 @@ function Canvas({
           return;
         }
         if (!began) return;
-        if (chat.status === "error") {
+        if (cancelledSession.current === chat) {
+          setFeedback("Update stopped. Review any changes before saving.");
+        } else if (chat.status === "error") {
           const part = chat.messages
             .flatMap((m) => m.parts)
             .find((p) => p.type === "error");
@@ -249,6 +257,8 @@ function Canvas({
         }
         setBusy(false);
         chat.removeEventListener("changed", listener);
+        chat.close();
+        if (session.current === chat) session.current = null;
       };
       chat.addEventListener("changed", listener);
       chat.sendMessage(text.trim());
@@ -279,7 +289,7 @@ function Canvas({
           "Could not save this layout. Your preview is still open.",
         );
       onDirty(false);
-      setFeedback("Dashboard layout saved for this niche.");
+      setFeedback("Dashboard layout saved.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save this layout.");
     } finally {
@@ -333,6 +343,7 @@ function Canvas({
         {busy && (
           <LinkButton
             onClick={() => {
+              cancelledSession.current = session.current;
               session.current?.cancel();
               setBusy(false);
             }}

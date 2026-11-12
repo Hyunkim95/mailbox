@@ -89,9 +89,10 @@ export class PayPal {
             customer_type: "CONSUMER",
             permit_multiple_payment_tokens: true,
             description:
-              "Mailbox service wallet with user-controlled spending limits",
+              "Pigeon service wallet with user-controlled spending limits",
             experience_context: {
-              brand_name: "Mailbox",
+              brand_name: "Pigeon",
+              locale: "en-US",
               return_url: returnUrl,
               cancel_url: cancelUrl,
               shipping_preference: "NO_SHIPPING",

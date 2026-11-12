@@ -2,8 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 import { Webhook } from "svix";
 async function login(page: Page, agent = "Reel") {
   await page.goto("/");
-  await page.getByLabel("Demo access key").fill("mailbox-browser-test-access");
-  await page.getByRole("button", { name: "Open Mailbox" }).click();
+  await page.getByLabel("Access key").fill("mailbox-browser-test-access");
+  await page.getByRole("button", { name: "Open Pigeon" }).click();
   await expect(page.getByRole("heading", { name: /needs? you/ })).toBeVisible();
   const state = await (await page.request.get("/api/state")).json();
   expect(state.configuration.paypal).toBe(false);
@@ -16,27 +16,245 @@ async function login(page: Page, agent = "Reel") {
     page.getByRole("heading", { name: agent, exact: true }),
   ).toBeVisible();
 }
+// Explicit owner preparation for control tests, not an agent decision.
+async function prepareService(
+  page: Page,
+  serviceId = "basil-market",
+  name = "Pantry",
+) {
+  const state = await (await page.request.get("/api/state")).json();
+  const agent = state.agents.find((a: { name: string }) => a.name === name);
+  const response = await page.request.post("/api/command", {
+    data: {
+      action: "propose",
+      agent_id: agent.id,
+      service_id: serviceId,
+      kind: serviceId === "coast-screen" ? "subscribe" : "buy",
+    },
+  });
+  expect(response.ok()).toBe(true);
+  await page.reload();
+  await page.getByRole("button", { name: `Open ${name}`, exact: true }).click();
+  await expect(page.getByTestId("proposal")).toBeVisible();
+}
+
 async function seed(page: Page) {
-  await page.getByRole("button", { name: "Demo", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Workspace menu", exact: true })
+    .click();
   await page.getByRole("button", { name: "Load sample messages" }).click();
   await expect(
     page.getByRole("button", { name: "Inbox 6", exact: true }),
   ).toBeVisible();
 }
 
+test("a second agent can review the same shop using a fresh isolated connection", async ({
+  page,
+}) => {
+  await login(page, "Pantry");
+  await prepareService(page);
+  const before = await (await page.request.get("/api/state")).json();
+  const pantry = before.agents.find(
+    (a: { name: string }) => a.name === "Pantry",
+  );
+  const original = before.wallets.find(
+    (w: { agent_id: string; service_id: string }) =>
+      w.agent_id === pantry.id && w.service_id === "basil-market",
+  );
+  const created = await page.request.post("/api/command", {
+    data: {
+      action: "create_agent",
+      name: "Fresh Shopping",
+      purpose: "Separate household shopping",
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const { agent } = await created.json();
+  const proposal = await page.request.post("/api/command", {
+    data: {
+      action: "propose",
+      agent_id: agent.id,
+      service_id: "basil-market",
+      kind: "buy",
+    },
+  });
+  expect(proposal.ok()).toBe(true);
+  const { proposal: review } = await proposal.json();
+  expect(review.wallet_id).not.toBe(original.id);
+  await page.goto(`/?agent=${agent.id}&view=services`);
+  await expect(
+    page.getByRole("heading", { name: "Fresh Shopping", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("proposal")).toBeVisible();
+  const after = await (await page.request.get("/api/state")).json();
+  const fresh = after.wallets.find(
+    (w: { id: string }) => w.id === review.wallet_id,
+  );
+  expect(fresh.connected).toBe(false);
+  expect(fresh.mode).toBe("draft");
+  expect(fresh.spent).toBe(0);
+  expect(fresh.email).toBeNull();
+  expect(
+    after.wallets.find((w: { id: string }) => w.id === original.id),
+  ).toEqual(original);
+  expect(
+    after.proposals.every((p: { status: string }) => p.status !== "PAID"),
+  ).toBe(true);
+});
+
+test("a quoted payment stops at saved limits and only the owner's edited limits unblock review", async ({
+  page,
+}) => {
+  await login(page, "Pantry");
+  await prepareService(page);
+  const s = await (await page.request.get("/api/state")).json(),
+    p = s.proposals[0],
+    w = s.wallets.find((w: { id: string }) => w.id === p.wallet_id);
+  const r = await page.request.post("/api/command", {
+    data: {
+      action: "rules",
+      id: w.id,
+      rules: {
+        revision: w.revision,
+        cap: 500,
+        per_action: 500,
+        auto_under: 0,
+        daily_limit: 3,
+        mode: "ask",
+        period: w.period,
+        timezone: w.timezone,
+        expires_at: w.expires_at,
+      },
+    },
+  });
+  expect(r.ok()).toBe(true);
+  await page.reload();
+  const card = page.getByTestId("proposal"),
+    approve = card.getByRole("button", {
+      name: "Approve and connect PayPal",
+      exact: true,
+    });
+  await expect(approve).toBeDisabled();
+  await expect(card.getByRole("alert")).toContainText(
+    "per-action limit is $5.00",
+  );
+  await card.getByRole("button", { name: "Edit limits", exact: true }).click();
+  await card.getByLabel("Per action, USD", { exact: true }).fill("10.00");
+  await expect(approve).toBeDisabled();
+  await expect(card.getByRole("alert")).toContainText(
+    "wallet has $5.00 available",
+  );
+  await card.getByLabel("Wallet cap, USD", { exact: true }).fill("10.00");
+  await expect(approve).toBeEnabled();
+  const after = await (await page.request.get("/api/state")).json();
+  expect(after.wallets.find((x: { id: string }) => x.id === w.id).cap).toBe(
+    500,
+  );
+  expect(after.proposals[0].status).toBe("NEEDS_APPROVAL");
+  expect(after.proposals[0].capture_id).toBeNull();
+});
+
+test("an expired quote blocks approval and replays the exact original request for a fresh review", async ({
+  page,
+}) => {
+  await login(page, "Pantry");
+  await prepareService(page);
+  const state = await (await page.request.get("/api/state")).json(),
+    proposal = state.proposals[0];
+  const original = "Find one current coffee pack under USD 10 for approval.";
+  proposal.owner_request = original;
+  proposal.quote_expires = new Date(Date.now() - 1000).toISOString();
+  state.now = new Date().toISOString();
+  await page.route("**/api/state", (r) => r.fulfill({ json: state }));
+  await page.reload();
+  await expect(page.getByTestId("proposal")).toContainText("Price expired");
+  await expect(
+    page.getByRole("button", {
+      name: "Approve and connect PayPal",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  const request = page.waitForRequest(
+    (r) =>
+      r.url().endsWith("/api/command") && r.postDataJSON()?.action === "ask",
+  );
+  await page
+    .getByRole("button", { name: "Get a fresh review", exact: true })
+    .click();
+  const sent = await request;
+  expect(sent.postDataJSON().text).toBe(original);
+  expect(sent.postDataJSON().agent_id).toBe(proposal.agent_id);
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Connect a model" }),
+  ).toBeVisible();
+  const actual = await (await page.request.get("/api/state")).json();
+  expect(actual.proposals[0].capture_id).toBeNull();
+});
+
+test("a total allowance survives reload, remains scoped and blocks approval above the combined remainder", async ({
+  page,
+}) => {
+  await login(page, "Pantry");
+  const panel = page.getByRole("region", { name: "Agent total allowance" });
+  await panel
+    .getByText("Set a total allowance across services", { exact: true })
+    .click();
+  await panel.getByLabel("Total limit, USD", { exact: true }).fill("5.00");
+  await panel.getByRole("button", { name: "Save total allowance" }).click();
+  await expect(panel).toContainText("$5.00 available of $5.00");
+  await prepareService(page);
+  await expect(
+    page.getByRole("alert").filter({ hasText: "remaining total allowance" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Approve and connect PayPal",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  const state = await (await page.request.get("/api/state")).json();
+  const p = state.proposals[0],
+    w = state.wallets.find((w: { id: string }) => w.id === p.wallet_id);
+  const r = await page.request.post("/api/command", {
+    data: {
+      action: "approve",
+      id: p.id,
+      rules: {
+        revision: w.revision,
+        cap: w.cap,
+        per_action: w.per_action,
+        auto_under: 0,
+        daily_limit: w.daily_limit,
+        mode: "ask",
+        period: w.period,
+        timezone: w.timezone,
+        expires_at: w.expires_at,
+      },
+    },
+  });
+  expect(r.ok()).toBe(false);
+  expect((await r.json()).error).toBe("AGENT_ALLOWANCE");
+  const after = await (await page.request.get("/api/state")).json();
+  expect(after.proposals[0].status).toBe("NEEDS_APPROVAL");
+  expect(after.agent_allowances[0].spent).toBe(0);
+  expect(after.agent_allowances[0].reserved).toBe(0);
+  await page.reload();
+  await expect(panel).toContainText("$5.00 available of $5.00");
+  await page.getByRole("button", { name: "Open Reel", exact: true }).click();
+  await expect(panel).not.toContainText("$5.00 available");
+});
+
 test("streaming choices lead to a visible wallet permission and honest missing-credential state", async ({
   page,
 }) => {
   await login(page);
-  await page.getByRole("button", { name: "Watch a film", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Find a service", exact: true })
+    .click();
   await expect(
-    page.getByRole("heading", {
-      name: "Three ways to watch The Lantern Coast",
-    }),
+    page.getByRole("heading", { name: "Explore the fixture services" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: /Coast Screen.*\$7\.99/ }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: /Coast Screen.*\$7\.99/ }).click();
   await page
     .getByRole("button", { name: "Review proposal", exact: true })
     .click();
@@ -94,50 +312,34 @@ test("fixture mail, original source view and keyboard dismissal work without a c
     page.getByRole("button", { name: "Inbox 6", exact: true }),
   ).toHaveAttribute("aria-current", "page");
 });
-test("coffee proposal explains unit comparison, stale rejection and source evidence", async ({
+test("suggestions require the model and never execute a scripted scenario", async ({
   page,
 }) => {
   await login(page, "Pantry");
-  await seed(page);
-  await page
-    .getByRole("button", { name: "Find a coffee deal", exact: true })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Why this deal", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByTestId("proposal-rationale")).toContainText(
-    "excluded 1 expired email offer",
-  );
-  await expect(
-    page
-      .getByTestId("deal-comparison")
-      .locator("tbody tr")
-      .filter({ hasText: "250 g" }),
-  ).toContainText(/\$6\.50.*\$26\.00/);
-  await expect(
-    page
-      .getByTestId("deal-comparison")
-      .locator("tbody tr")
-      .filter({ hasText: "500 g" }),
-  ).toContainText(/\$14\.75.*\$29\.50/);
-  await page
-    .getByTestId("source-links")
-    .getByRole("button", { name: /This week: house coffee/ })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText("coffee-250g");
-  await page.keyboard.press("Escape");
-  await page.screenshot({
-    path: "test-results/screenshots/coffee-desktop.png",
-    fullPage: true,
-  });
+  for (const name of [
+    "Find a coffee deal",
+    "What’s new?",
+    "Reply to Basil & Barley Market",
+  ]) {
+    await page.getByRole("button", { name, exact: true }).click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Connect a model" }),
+    ).toBeVisible();
+    const state = await (await page.request.get("/api/state")).json();
+    expect(state.proposals).toHaveLength(0);
+    expect(state.reply_drafts).toHaveLength(0);
+    expect(
+      state.audit.some(
+        (event: { action: string }) => event.action === "REQUEST_INTERPRETED",
+      ),
+    ).toBe(false);
+  }
 });
 test("wallet limits save through the UI and survive reload", async ({
   page,
 }) => {
   await login(page, "Pantry");
-  await page
-    .getByRole("button", { name: "Find a coffee deal", exact: true })
-    .click();
+  await prepareService(page);
   await expect(
     page.getByRole("heading", { name: "House coffee, 250 g", exact: true }),
   ).toBeVisible();
@@ -166,13 +368,13 @@ test("reset creates a fresh workspace and cancels queued authority", async ({
   page,
 }) => {
   await login(page, "Pantry");
-  await page
-    .getByRole("button", { name: "Find a coffee deal", exact: true })
-    .click();
+  await prepareService(page);
   await expect(
     page.getByRole("heading", { name: "House coffee, 250 g", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Demo", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Workspace menu", exact: true })
+    .click();
   page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByRole("button", { name: "Reset workspace", exact: true })
@@ -190,9 +392,7 @@ test("disconnect blocks spending and reconnect requires fresh permission", async
   page,
 }) => {
   await login(page, "Pantry");
-  await page
-    .getByRole("button", { name: "Find a coffee deal", exact: true })
-    .click();
+  await prepareService(page);
   await page
     .getByRole("button", { name: /Basil & Barley Market Ready to connect/ })
     .click();
@@ -256,9 +456,7 @@ test("AG Studio layout saves for its niche and stays private to its workspace", 
     .getByRole("button", { name: "Restore default", exact: true })
     .click();
   await page.getByRole("button", { name: "Save layout", exact: true }).click();
-  await expect(
-    page.getByText("Dashboard layout saved for this niche."),
-  ).toBeVisible();
+  await expect(page.getByText("Dashboard layout saved.")).toBeVisible();
   const ownerState = await (await page.request.get("/api/state")).json();
   const agentId = ownerState.agents.find(
     (agent: { name: string }) => agent.name === "Pantry",
@@ -287,7 +485,7 @@ test("AG Studio layout saves for its niche and stays private to its workspace", 
     await otherContext.close();
   }
 });
-test("market search reports missing Channel3 access without a fabricated product or purchase", async ({
+test("typed requests need a model; explicit market search still reports its missing connection", async ({
   page,
 }) => {
   await login(page, "Pantry");
@@ -296,8 +494,13 @@ test("market search reports missing Channel3 access without a fabricated product
     .fill("wireless headphones under $100");
   await page.getByRole("button", { name: "Send request", exact: true }).click();
   await expect(
-    page.getByRole("alert").filter({ hasText: "Channel3 connection" }),
+    page.getByRole("alert").filter({ hasText: "Connect a model" }),
   ).toBeVisible();
+  const search = await page.request.post("/api/command", {
+    data: { action: "market_search", text: "wireless headphones under $100" },
+  });
+  expect(search.ok()).toBe(false);
+  expect((await search.json()).message).toContain("Channel3 connection");
   const state = await (await page.request.get("/api/state")).json();
   expect(state.proposals).toHaveLength(0);
 });
@@ -307,12 +510,7 @@ test.describe("phone layout", () => {
     page,
   }) => {
     await login(page);
-    await page
-      .getByRole("button", { name: "Watch a film", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "Review proposal", exact: true })
-      .click();
+    await prepareService(page, "coast-screen", "Reel");
     await expect(
       page.getByRole("heading", { name: "One month of Coast Screen" }),
     ).toBeVisible();
@@ -382,10 +580,7 @@ test("agent sections switch with the agent without replacing global navigation",
   await reelSections
     .getByRole("button", { name: "Overview", exact: true })
     .click();
-  await page.getByRole("button", { name: "Watch a film", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Review proposal", exact: true })
-    .click();
+  await prepareService(page, "coast-screen", "Reel");
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "One month of Coast Screen" }),
@@ -467,43 +662,16 @@ test("an agent's look can be chosen or randomized and is saved", async ({
   ).toHaveAttribute("aria-pressed", "true");
 });
 
-test("each agent offers its own suggestions, a digest and a reply that waits for approval", async ({
+test("suggestions stay specific to the selected agent and cannot bypass reply approval", async ({
   page,
 }) => {
   await login(page, "Pantry");
-  await seed(page);
   await expect(
     page.getByRole("button", { name: "Find a coffee deal", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Watch a film", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "What’s new?", exact: true }).click();
-  const digest = page.getByRole("region", { name: "Digest" });
-  await expect(digest).toContainText("6 messages from Basil & Barley Market");
-  await expect(digest).toContainText("Nothing needs you");
-  await expect(digest).toContainText("Worth knowing");
-  await expect(digest).toContainText("Set aside");
-  await digest
-    .getByRole("button", { name: "Last week’s coffee special: $4.25" })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText("expired");
-  await page.keyboard.press("Escape");
-  await page
-    .getByRole("button", {
-      name: "Reply to Basil & Barley Market",
-      exact: true,
-    })
-    .click();
-  const reply = page.getByRole("region", { name: "Reply draft" });
-  await expect(reply).toContainText("Waiting for your approval");
-  await expect(reply.getByRole("textbox")).toHaveValue(
-    /Could you confirm the details/,
-  );
-  await expect(reply).toContainText("needs its own address");
-  await expect(
-    reply.getByRole("button", { name: "Send reply", exact: true }),
-  ).toBeDisabled();
   const state = await (await page.request.get("/api/state")).json();
   const pantry = state.agents.find(
     (agent: { name: string }) => agent.name === "Pantry",
@@ -519,31 +687,23 @@ test("each agent offers its own suggestions, a digest and a reply that waits for
   expect((await refused.json()).message).toContain(
     "address before it can reply",
   );
-  await reply.getByRole("button", { name: "Discard", exact: true }).click();
-  await expect(reply).toHaveCount(0);
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth),
-  ).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth));
 });
 
-test("an unrelated search error is not shown as a pending payment error", async ({
+test("an unrelated agent request error is not shown as a pending payment error", async ({
   page,
 }) => {
   await login(page, "Reel");
-  await page.getByRole("button", { name: "Watch a film", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Review proposal", exact: true })
-    .click();
+  await prepareService(page, "coast-screen", "Reel");
   await page
     .getByRole("textbox", { name: /^Ask / })
     .fill("wireless headphones under $100");
   await page.getByRole("button", { name: "Send request", exact: true }).click();
   await expect(
-    page.getByRole("alert").filter({ hasText: "Channel3 connection" }),
+    page.getByRole("alert").filter({ hasText: "Connect a model" }),
   ).toBeVisible();
   await expect(page.getByTestId("proposal")).toBeVisible();
   await expect(page.getByTestId("proposal")).not.toContainText(
-    "Channel3 connection",
+    "Connect a model",
   );
 });
 
@@ -629,10 +789,7 @@ test("a completed subscription does not ask for an older duplicate approval", as
   page,
 }) => {
   await login(page);
-  await page.getByRole("button", { name: "Watch a film", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Review proposal", exact: true })
-    .click();
+  await prepareService(page, "coast-screen", "Reel");
   await expect(page.getByTestId("proposal")).toBeVisible();
   const state = await (await page.request.get("/api/state")).json();
   const pending = state.proposals[0];

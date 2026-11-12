@@ -6,6 +6,9 @@ import { Home } from "./home";
 import { ProposalCard } from "./proposal-card";
 import { Digest } from "./digest";
 import { ReplyCard, type ReplyDraft } from "./reply-card";
+import { CancellationCard } from "./cancellation-card";
+import { AgentAllowancePanel } from "./agent-allowance";
+import { TaskChecklist, DocumentsPanel, EvidenceLinks } from "./work-evidence";
 import {
   isExpiredOffer,
   isDuplicateSubscription,
@@ -13,6 +16,8 @@ import {
   needsYou,
   senderName,
   shortDate as date,
+  connectedWorkspace,
+  readyAgentIds,
 } from "./agent-scope";
 import {
   Badge,
@@ -26,14 +31,14 @@ import {
 } from "./ui";
 import { Avatar, lookFor } from "./ui/avatar";
 import type { MarketResult } from "../src/market";
-const NicheDashboard = dynamic(() => import("@mailbox/dashboard"), {
+const NicheDashboard = dynamic(() => import("./niche-dashboard"), {
   ssr: false,
   loading: () => <p>Opening your dashboard…</p>,
 });
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowRight,
-  Mail,
+  Bird,
   ShieldCheck,
   X,
   Wallet as WalletIcon,
@@ -56,6 +61,7 @@ import type {
   Proposal,
   Message,
   PublicAgent,
+  AgentDocument,
 } from "../src/app-model";
 import { WalletRuleForm } from "./wallet-rule-form";
 
@@ -68,13 +74,15 @@ type Option = {
   terms: string;
   category: string;
 };
-/** The market half of a request: it runs beside the services half and fails on its own. */
-type MarketSearch =
-  | { status: "searching" }
-  | { status: "found"; result: MarketResult }
-  | { status: "failed"; message: string };
 type Result = {
-  type: "options" | "answer" | "proposal" | "market" | "digest" | "reply";
+  type:
+    | "options"
+    | "answer"
+    | "proposal"
+    | "market"
+    | "digest"
+    | "reply"
+    | "cancellation";
   draft?: ReplyDraft;
   market?: MarketResult;
   title?: string;
@@ -87,6 +95,7 @@ type Result = {
 const agentSections = [
   { id: "services", label: "Overview" },
   { id: "messages", label: "Inbox" },
+  { id: "documents", label: "Documents" },
   { id: "dashboards", label: "Dashboard" },
   { id: "activity", label: "Activity" },
 ];
@@ -141,9 +150,10 @@ const categorySample: Record<string, string> = {
 /** What this agent can be asked in one click: a digest, its own jobs, a reply. */
 function suggestionsFor(agent: PublicAgent, state: AppState): Sample[] {
   const categories = new Set(
-    [agent.template, ...state.wallets.map((wallet) => wallet.category)].filter(
-      (category): category is string => !!category,
-    ),
+    (agent.tags.length
+      ? agent.tags
+      : [agent.template, ...state.wallets.map((wallet) => wallet.category)]
+    ).filter((category): category is string => !!category),
   );
   const latest = state.messages
     .filter((message) => !message.facts.suspicious)
@@ -166,7 +176,7 @@ function suggestionsFor(agent: PublicAgent, state: AppState): Sample[] {
       : []),
   ];
 }
-export default function Mailbox() {
+export default function Pigeon() {
   const [workspaceState, setState] = useState<AppState | null>(null),
     [needsLogin, setNeedsLogin] = useState(false),
     [loginKey, setLoginKey] = useState("");
@@ -206,24 +216,46 @@ export default function Mailbox() {
           messages: workspaceState.messages.filter(
             (message) => message.agent_id === activeAgent.id,
           ),
-          audit: workspaceState.audit.filter(
-            (event) =>
-              !event.service_id ||
-              workspaceState.wallets.some(
-                (wallet) =>
-                  wallet.service_id === event.service_id &&
-                  (wallet.agent_id === activeAgent.id ||
-                    (!wallet.agent_id &&
-                      activeAgent.template === wallet.category)),
-              ),
+          tasks:
+            workspaceState.tasks?.filter(
+              (t) => t.agent_id === activeAgent.id,
+            ) ?? [],
+          cancellation_reviews:
+            workspaceState.cancellation_reviews?.filter(
+              (r) => r.agent_id === activeAgent.id,
+            ) ?? [],
+          agent_allowances:
+            workspaceState.agent_allowances?.filter(
+              (r) => r.agent_id === activeAgent.id,
+            ) ?? [],
+          reply_drafts:
+            workspaceState.reply_drafts?.filter(
+              (r) => r.agent_id === activeAgent.id,
+            ) ?? [],
+          documents:
+            workspaceState.documents?.filter(
+              (d) => d.agent_id === activeAgent.id,
+            ) ?? [],
+          audit: workspaceState.audit.filter((event) =>
+            event.agent_id
+              ? event.agent_id === activeAgent.id
+              : !event.service_id ||
+                workspaceState.wallets.some(
+                  (wallet) =>
+                    wallet.service_id === event.service_id &&
+                    (wallet.agent_id === activeAgent.id ||
+                      (!wallet.agent_id &&
+                        activeAgent.template === wallet.category)),
+                ),
           ),
         }
-      : workspaceState;
+      : workspaceState
+        ? connectedWorkspace(workspaceState)
+        : null;
   function openAgent(id: string, section = "services") {
     setActiveAgentId(id);
     setView(section);
     setResult(null);
-    setMarket(null);
     setAsk("");
     setSelectedService(null);
     setError("");
@@ -231,7 +263,6 @@ export default function Mailbox() {
   }
   const [view, setView] = useState("agents"),
     [ask, setAsk] = useState(""),
-    [market, setMarket] = useState<MarketSearch | null>(null),
     [result, setResult] = useState<Result | null>(null),
     [busy, setBusy] = useState<string | null>(null),
     [error, setError] = useState(""),
@@ -239,7 +270,8 @@ export default function Mailbox() {
     [notice, setNotice] = useState("");
   const [selectedService, setSelectedService] = useState<string | null>(null),
     [openMessage, setOpenMessage] = useState<Message | null>(null),
-    [selectedOption, setSelectedOption] = useState("coast-screen"),
+    [openDocument, setOpenDocument] = useState<AgentDocument | null>(null),
+    [selectedOption, setSelectedOption] = useState(""),
     [showSdk, setShowSdk] = useState(false),
     [demoOpen, setDemoOpen] = useState(false),
     [editingWallet, setEditingWallet] = useState<string | null>(null);
@@ -252,6 +284,51 @@ export default function Mailbox() {
     if (response.ok) {
       setState(await response.json());
       setNeedsLogin(false);
+    }
+  }
+  async function openSource(id: string) {
+    const message = state?.messages.find((m) => m.id === id);
+    if (message) {
+      setOpenMessage(message);
+      return;
+    }
+    if (!state?.documents?.some((d) => d.id === id)) return;
+    try {
+      const r = await fetch(`/api/documents/${encodeURIComponent(id)}`);
+      const data = await r.json();
+      if (!r.ok)
+        throw Error(data.message ?? "This document could not be opened.");
+      setOpenDocument(data.document);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "This document could not be opened.",
+      );
+    }
+  }
+  async function uploadDocument(file: File) {
+    if (!activeAgent) return;
+    setBusy("upload");
+    setError("");
+    const form = new FormData();
+    form.set("agent_id", activeAgent.id);
+    form.set("file", file);
+    try {
+      const r = await fetch("/api/documents", { method: "POST", body: form });
+      const data = await r.json();
+      if (!r.ok)
+        throw Error(data.message ?? "The document could not be added.");
+      await refresh();
+      setNotice(
+        data.document.status === "readable"
+          ? "Document added and ready to search."
+          : data.document.limitation,
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "The document could not be added.",
+      );
+    } finally {
+      setBusy(null);
     }
   }
   useEffect(() => {
@@ -319,12 +396,26 @@ export default function Mailbox() {
     };
   }, [demoOpen]);
   // A proposal, digest or reply draft renders at the top of the agent page; bring it into view.
+  const currentReply =
+    result?.type === "reply"
+      ? result.draft
+      : result
+        ? undefined
+        : state?.reply_drafts?.find((r) => r.agent_id === activeAgent?.id)
+            ?.draft;
+  const currentCancellation = state?.cancellation_reviews
+    ?.filter((r) => r.agent_id === activeAgent?.id)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
   const leadResult =
-    result?.type === "proposal"
-      ? result.proposal?.id
-      : result?.type === "digest" || result?.type === "reply"
-        ? result
-        : undefined;
+    result?.type === "cancellation"
+      ? currentCancellation?.id
+      : result?.type === "proposal"
+        ? result.proposal?.id
+        : currentReply
+          ? `${currentReply.message_id}:${currentReply.body}`
+          : result?.type === "digest"
+            ? result
+            : undefined;
   useEffect(() => {
     if (leadResult) window.scrollTo({ top: 0 });
   }, [leadResult]);
@@ -371,7 +462,7 @@ export default function Mailbox() {
         setView("agents");
         setNotice(
           data.workspaceRetained
-            ? "Demo reset. Spending is paused; agent addresses, messages and payment history are kept."
+            ? "Workspace reset. Spending is paused; agent addresses, messages and payment history are kept."
             : "Fresh workspace opened. Old wallets are paused and past sandbox payments remain recorded.",
         );
       }
@@ -380,11 +471,7 @@ export default function Mailbox() {
           data.type === "market" ? { type: "market", market: data } : data,
         );
         if (data.type === "options")
-          setSelectedOption(
-            data.options.some((o: Option) => o.id === "coast-screen")
-              ? "coast-screen"
-              : (data.options[0]?.id ?? ""),
-          );
+          setSelectedOption(data.options[0]?.id ?? "");
       }
       await refresh();
       return data;
@@ -405,47 +492,7 @@ export default function Mailbox() {
     if (!text) return;
     setAsk(text);
     setView("services");
-    // A typed request checks the owner's services and the wider market together.
-    // Scripted samples only replay a services walkthrough.
-    const actor = activeAgentId;
-    if (example) setMarket(null);
-    else {
-      setMarket({ status: "searching" });
-      void fetch("/api/command", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "market_search",
-          text,
-          ...(actor ? { agent_id: actor } : {}),
-        }),
-      })
-        .then(async (response) => {
-          const data = await response.json();
-          if (actorRef.current !== actor) return;
-          setMarket(
-            response.ok
-              ? { status: "found", result: data }
-              : {
-                  status: "failed",
-                  message: data.message ?? "The market search did not finish.",
-                },
-          );
-        })
-        .catch(() => {
-          if (actorRef.current === actor)
-            setMarket({
-              status: "failed",
-              message: "The market search did not finish.",
-            });
-        });
-    }
-    const answer = await command(
-      { action: "ask", text, ...(example ? { example: example.id } : {}) },
-      "ask",
-    );
-    // The services half can itself answer with market results; show them once.
-    if (answer?.type === "market") setMarket(null);
+    await command({ action: "ask", text }, "ask");
   }
   async function browse() {
     setBusy("browse");
@@ -475,7 +522,7 @@ export default function Mailbox() {
           }),
         ),
       });
-      setSelectedOption("coast-screen");
+      setSelectedOption(d.services[0]?.id ?? "");
       setView("services");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Services are unavailable.");
@@ -521,14 +568,13 @@ export default function Mailbox() {
       <main className="ui-center">
         <span className="ui-brand">
           <span className="ui-brand-mark">
-            <Mail size={13} />
+            <Bird size={15} aria-hidden="true" />
           </span>
-          <span>Mailbox</span>
+          <span>Pigeon</span>
         </span>
         <h1 className="ui-title">Your services, your terms</h1>
         <p className="ui-sub is-flush">
-          A demo with invented services on the PayPal sandbox. No real money
-          moves.
+          Invented services on the PayPal sandbox. No real money moves.
         </p>
         <form
           className="ui-form"
@@ -538,7 +584,7 @@ export default function Mailbox() {
           }}
         >
           <label htmlFor="demo-key">
-            Demo access key
+            Access key
             <input
               id="demo-key"
               type="password"
@@ -560,7 +606,7 @@ export default function Mailbox() {
             busy={!!busy}
             disabled={!!busy}
           >
-            Open Mailbox
+            Open Pigeon
           </Button>
         </form>
       </main>
@@ -580,7 +626,10 @@ export default function Mailbox() {
     : view === "messages" || view === "inbox"
       ? view
       : "agents";
-  const needs = needsYou(workspaceState);
+  const overview = connectedWorkspace(workspaceState);
+  const ready = readyAgentIds(workspaceState);
+  const needs = needsYou(overview);
+  const allNeeds = needsYou(workspaceState);
   const activeAgentIndex = activeAgent
     ? workspaceState.agents.indexOf(activeAgent)
     : -1;
@@ -600,7 +649,6 @@ export default function Mailbox() {
     setView(id);
     setActiveAgentId(null);
     setResult(null);
-    setMarket(null);
     setSelectedService(null);
   }
   const demo = (run: () => void) => () => {
@@ -612,9 +660,9 @@ export default function Mailbox() {
       <aside className="ui-side">
         <a className="ui-brand" href="/">
           <span className="ui-brand-mark">
-            <Mail size={13} />
+            <Bird size={15} aria-hidden="true" />
           </span>
-          <span>Mailbox</span>
+          <span>Pigeon</span>
         </a>
         <div className="ui-side-scroll">
           <nav aria-label="Your space">
@@ -636,10 +684,8 @@ export default function Mailbox() {
               onClick={() => openWorkspace("messages")}
             >
               Messages{" "}
-              {workspaceState.messages.length > 0 && (
-                <span className="ui-nav-count">
-                  {workspaceState.messages.length}
-                </span>
+              {overview.messages.length > 0 && (
+                <span className="ui-nav-count">{overview.messages.length}</span>
               )}
             </button>
           </nav>
@@ -647,31 +693,55 @@ export default function Mailbox() {
             Agents
           </span>
           <nav aria-labelledby="agents-label">
-            {workspaceState.agents.map((agent, index) => {
-              const waiting = needs.filter(
-                (need) => need.agent.id === agent.id,
-              );
-              return (
-                <button
-                  key={agent.id}
-                  className="ui-nav"
-                  aria-label={`Open ${agent.name}`}
-                  aria-current={activeAgentId === agent.id ? "page" : undefined}
-                  title={
-                    waiting.length
-                      ? `${waiting.length} thing${waiting.length > 1 ? "s" : ""} need${waiting.length > 1 ? "" : "s"} you`
-                      : undefined
-                  }
-                  onClick={() => openAgent(agent.id)}
-                >
-                  <Avatar look={lookFor(agent, index)} />
-                  {agent.name}
-                  {waiting.length > 0 && (
-                    <span className="ui-nav-count is-hot">
-                      {waiting.length}
-                    </span>
-                  )}
-                </button>
+            {["connected", "setup", "history"].map((group) => {
+              const agents = workspaceState.agents.filter((a) => {
+                if (a.archived_at) return group === "history";
+                return (
+                  group ===
+                  (!ready.size || ready.has(a.id) ? "connected" : "setup")
+                );
+              });
+              if (!agents.length) return null;
+              const links = agents.map((agent) => {
+                const index = workspaceState.agents.indexOf(agent);
+                const waiting = allNeeds.filter(
+                  (need) => need.agent.id === agent.id,
+                );
+                return (
+                  <button
+                    key={agent.id}
+                    className="ui-nav"
+                    aria-label={`Open ${agent.name}`}
+                    aria-current={
+                      activeAgentId === agent.id ? "page" : undefined
+                    }
+                    title={
+                      waiting.length
+                        ? `${waiting.length} thing${waiting.length > 1 ? "s" : ""} need${waiting.length > 1 ? "" : "s"} you`
+                        : undefined
+                    }
+                    onClick={() => openAgent(agent.id)}
+                  >
+                    <Avatar look={lookFor(agent, index)} />
+                    {agent.name}
+                    {waiting.length > 0 && (
+                      <span className="ui-nav-count is-hot">
+                        {waiting.length}
+                      </span>
+                    )}
+                  </button>
+                );
+              });
+              return group === "connected" ? (
+                <div key="connected">{links}</div>
+              ) : (
+                <details key={group}>
+                  <summary className="ui-nav">
+                    {group === "history" ? "History" : "Finish setup"} (
+                    {agents.length})
+                  </summary>
+                  {links}
+                </details>
               );
             })}
             <button
@@ -687,11 +757,12 @@ export default function Mailbox() {
           <span className="ui-who">Maya</span>
           <Button
             variant="small"
+            aria-label="Workspace menu"
             aria-expanded={demoOpen}
             aria-haspopup="true"
             onClick={() => setDemoOpen((open) => !open)}
           >
-            Demo
+            Menu
           </Button>
           <Button
             variant="icon"
@@ -703,8 +774,8 @@ export default function Mailbox() {
           </Button>
           <small>
             {workspaceState.shared_demo
-              ? "Shared demo workspace"
-              : "Private demo workspace"}
+              ? "Shared workspace"
+              : "Private workspace"}
           </small>
           {demoOpen && (
             <div className="ui-menu">
@@ -712,7 +783,7 @@ export default function Mailbox() {
                 className="ui-nav"
                 onClick={demo(() => openWorkspace("inbox"))}
               >
-                Before Mailbox
+                Before Pigeon
               </button>
               <button
                 className="ui-nav"
@@ -758,8 +829,8 @@ export default function Mailbox() {
                   if (
                     confirm(
                       workspaceState.shared_demo
-                        ? "Reset Maya’s shared demo? Spending will be paused, pending actions blocked and controlled streaming access canceled. Agent addresses and payment history stay recorded."
-                        : "Reset this demo workspace? Old wallets and rules will be paused, and controlled streaming access will be canceled. Past sandbox payments remain recorded.",
+                        ? "Reset Maya’s shared workspace? Spending will be paused, pending actions blocked and controlled streaming access canceled. Agent addresses and payment history stay recorded."
+                        : "Reset this workspace? Old wallets and rules will be paused, and controlled streaming access will be canceled. Past sandbox payments remain recorded.",
                     )
                   )
                     void command({ action: "reset" }, "reset");
@@ -776,6 +847,18 @@ export default function Mailbox() {
         </div>
       </aside>
       <main className="ui-main">
+        {state.configuration.email_preview && (
+          <aside className="ui-banner" aria-label="Test workspace">
+            Preview mail: email stays in this test workspace. Payment approvals
+            use the configured sandbox connection.
+          </aside>
+        )}
+        {activeAgent?.archived_at && (
+          <aside className="ui-banner" aria-label="Archived agent">
+            Archived records. This address has been retired and its payment
+            permissions removed.
+          </aside>
+        )}
         {error && (
           <Banner tone="danger" onDismiss={() => setError("")}>
             {error}
@@ -784,7 +867,7 @@ export default function Mailbox() {
         {notice && <Banner onDismiss={() => setNotice("")}>{notice}</Banner>}
         {screen === "agents" && (
           <Home
-            state={workspaceState}
+            state={overview}
             busy={!!busy}
             onOpenAgent={openAgent}
             onOpenMessage={setOpenMessage}
@@ -845,6 +928,14 @@ export default function Mailbox() {
             />
           </div>
         )}
+        {screen === "documents" && activeAgent && (
+          <DocumentsPanel
+            state={state}
+            busy={!!busy}
+            onUpload={uploadDocument}
+            onOpen={(id) => void openSource(id)}
+          />
+        )}
         {screen === "dashboards" && (
           <NicheDashboard
             key={activeAgent?.id ?? "all"}
@@ -854,6 +945,55 @@ export default function Mailbox() {
         )}
         {screen === "services" && activeAgent && (
           <div className="ui-col">
+            {currentCancellation && (
+              <CancellationCard
+                key={currentCancellation.id}
+                review={currentCancellation}
+                busy={!!busy}
+                onDiscard={() =>
+                  void command(
+                    {
+                      action: "discard_cancellations",
+                      id: currentCancellation.id,
+                    },
+                    "cancel-review",
+                  ).then(() => setResult(null))
+                }
+                onConfirm={async () => {
+                  const data = await command(
+                    {
+                      action: "confirm_cancellations",
+                      id: currentCancellation.id,
+                      revision: currentCancellation.revision,
+                    },
+                    "cancel-services",
+                  );
+                  return data
+                    ? null
+                    : "The cancellation outcomes could not be refreshed. Check each service before retrying.";
+                }}
+              />
+            )}
+            <AgentAllowancePanel
+              key={`${activeAgent.id}:${state.agent_allowances?.[0]?.revision ?? "none"}`}
+              allowance={state.agent_allowances?.[0] ?? null}
+              busy={!!busy}
+              onSave={async (input) =>
+                !!(await command(
+                  {
+                    action: "set_agent_allowance",
+                    agent_id: activeAgent.id,
+                    allowance: input,
+                  },
+                  "allowance",
+                ))
+              }
+            />
+            <TaskChecklist
+              tasks={state.tasks ?? []}
+              state={state}
+              onOpen={(id) => void openSource(id)}
+            />
             {showProposal && activeProposal && proposalWallet && (
               <ProposalCard
                 agent={activeAgent}
@@ -866,10 +1006,28 @@ export default function Mailbox() {
                 errorMessage={failedAction === "approve" ? error : ""}
                 proposal={activeProposal}
                 wallet={proposalWallet}
+                allowance={state.agent_allowances?.[0] ?? null}
+                {...(state.now ? { now: state.now } : {})}
+                onReviewAgain={() => {
+                  const text =
+                    activeProposal.owner_request ??
+                    `Prepare a current review for the same supported service ${proposalWallet.name}, exact item ${activeProposal.item_id}, quantity ${activeProposal.quantity}${activeProposal.booking ? `, booking ${JSON.stringify(activeProposal.booking)}` : ""}. Keep the same item and current wallet boundaries. Do not execute a payment.`;
+                  setAsk(text);
+                  void command({ action: "ask", text }, "ask");
+                }}
                 busy={!!busy}
                 sourceMessages={state.messages.filter((m) =>
                   activeProposal.sources.includes(m.id),
                 )}
+                evidence={
+                  activeProposal.sources.length ? (
+                    <EvidenceLinks
+                      ids={activeProposal.sources}
+                      state={state}
+                      onOpen={(id) => void openSource(id)}
+                    />
+                  ) : null
+                }
                 onSource={(id) =>
                   setOpenMessage(
                     state.messages.find((m) => m.id === id) ?? null,
@@ -911,21 +1069,37 @@ export default function Mailbox() {
                 }
               />
             )}
-            {!showProposal && result?.type === "reply" && result.draft && (
+            {!showProposal && currentReply && (
               <ReplyCard
-                key={`${result.draft.message_id}:${result.draft.body}`}
-                draft={result.draft}
+                key={`${currentReply.id ?? currentReply.message_id}:${currentReply.body}`}
+                draft={currentReply}
                 agent={activeAgent}
                 busy={!!busy}
-                onDiscard={() => setResult(null)}
+                evidence={
+                  <EvidenceLinks
+                    ids={currentReply.sources ?? []}
+                    state={state}
+                    onOpen={(id) => void openSource(id)}
+                  />
+                }
+                onDiscard={() =>
+                  void command(
+                    {
+                      action: "discard_reply",
+                      agent_id: activeAgent.id,
+                      draft_id: currentReply.id,
+                    },
+                    "discard-reply",
+                  ).then(() => setResult(null))
+                }
                 onConnectAgent={() =>
                   void command(
                     { action: "connect_agent", agent_id: activeAgent.id },
                     "connect-agent",
                   )
                 }
-                onSend={async (body, requestId) => {
-                  const draft = result.draft!;
+                onSend={async (body, requestId, documentIds) => {
+                  const draft = currentReply;
                   try {
                     const response = await fetch("/api/command", {
                       method: "POST",
@@ -935,12 +1109,18 @@ export default function Mailbox() {
                         id: draft.message_id,
                         body,
                         request_id: requestId,
+                        document_ids: documentIds,
+                        draft_id: draft.id,
                       }),
                     });
                     const data = await response.json();
                     if (!response.ok)
                       return data.message ?? "The reply could not be sent.";
                     await refresh();
+                    setResult(null);
+                    setNotice(
+                      `Reply sent to ${data.to_addresses?.join(", ") ?? draft.to_address ?? draft.to_name}.`,
+                    );
                     return null;
                   } catch {
                     return "The reply could not be sent. Check your connection and try again.";
@@ -949,79 +1129,70 @@ export default function Mailbox() {
               />
             )}
             <div
-              className={`ui-ask-head ${showProposal || result ? "" : "is-lead"}`}
+              className={`ui-ask-head ${showProposal || result || currentReply ? "" : "is-lead"}`}
             >
               <h2>
-                {showProposal || result
-                  ? `Ask ${activeAgent.name}`
-                  : `What should ${activeAgent.name} do?`}
+                {activeAgent.archived_at
+                  ? "Original records"
+                  : showProposal || result || currentReply
+                    ? `Ask ${activeAgent.name}`
+                    : `What should ${activeAgent.name} do?`}
               </h2>
             </div>
-            <form className="ui-ask" onSubmit={(e) => void submitAsk(e)}>
-              <label className="sr-only" htmlFor="ask">
-                Ask {activeAgent.name}
-              </label>
-              <Search size={16} />
-              <input
-                id="ask"
-                value={ask}
-                onChange={(e) => setAsk(e.target.value)}
-                placeholder="Find, compare or buy something"
-                disabled={busy === "ask"}
-              />
-              <Button
-                type="submit"
-                variant="icon"
-                aria-label="Send request"
-                busy={busy === "ask"}
-                disabled={!!busy || !ask.trim()}
-              >
-                <ArrowUp size={16} />
-              </Button>
-            </form>
-            <div className="ui-chips">
-              {suggestionsFor(activeAgent, state).map((sample) => (
-                <LinkButton
-                  key={sample.id}
-                  onClick={() => void submitAsk(undefined, sample)}
-                  disabled={!!busy}
-                >
-                  {sample.label}
-                </LinkButton>
-              ))}
-            </div>
+            {!activeAgent.archived_at && (
+              <>
+                <form className="ui-ask" onSubmit={(e) => void submitAsk(e)}>
+                  <label className="sr-only" htmlFor="ask">
+                    Ask {activeAgent.name}
+                  </label>
+                  <Search size={16} />
+                  <input
+                    id="ask"
+                    value={ask}
+                    onChange={(e) => setAsk(e.target.value)}
+                    placeholder="Find, compare or buy something"
+                    disabled={busy === "ask" || !!activeAgent.archived_at}
+                  />
+                  <Button
+                    type="submit"
+                    variant="icon"
+                    aria-label="Send request"
+                    busy={busy === "ask"}
+                    disabled={
+                      !!busy || !ask.trim() || !!activeAgent.archived_at
+                    }
+                  >
+                    <ArrowUp size={16} />
+                  </Button>
+                </form>
+                <div className="ui-chips">
+                  {suggestionsFor(activeAgent, state).map((sample) => (
+                    <LinkButton
+                      key={sample.id}
+                      onClick={() => void submitAsk(undefined, sample)}
+                      disabled={!!busy || !!activeAgent.archived_at}
+                    >
+                      {sample.label}
+                    </LinkButton>
+                  ))}
+                </div>
+              </>
+            )}
             {!state.configuration.model && (
               <p className="ui-note">
-                No model is connected, so typed requests will not work here. The
-                suggestions above still work.
+                Connect a model to use requests and suggestions. You can still
+                browse services and review your saved records.
               </p>
             )}
             {busy === "ask" && (
               <p className="ui-note" role="status">
                 <LoaderCircle size={14} className="spin" />
-                Checking your services and their terms
+                Working through your request
               </p>
             )}
             {result?.type === "market" &&
               result.market &&
               !priorityProposal && <MarketResults result={result.market} />}
-            {market?.status === "searching" && (
-              <p className="ui-note" role="status">
-                <LoaderCircle size={14} className="spin" />
-                Searching the wider market
-              </p>
-            )}
-            {market?.status === "failed" && (
-              <p className="ui-note is-danger" role="alert">
-                {market.message}
-              </p>
-            )}
-            {market?.status === "found" && (
-              <MarketResults result={market.result} />
-            )}
-            {result?.engine === "fixture" && (
-              <p className="ui-note">Scripted sample · no model was called</p>
-            )}
             {result?.type === "options" && !priorityProposal && (
               <section>
                 <div className="ui-section-head">
@@ -1095,31 +1266,28 @@ export default function Mailbox() {
                 <div className="ui-card-top">
                   <div>
                     <div className="ui-card-who">From your services</div>
-                    <h2 className="ui-card-title">{result.answer}</h2>
+                    <p className="ui-answer-copy">{result.answer}</p>
                   </div>
                 </div>
                 {!!result.sources?.length && (
                   <div className="ui-card-body">
                     <p className="ui-note">
                       Sources:
-                      {result.sources.map((id) => {
-                        const m = state.messages.find((m) => m.id === id);
-                        return m ? (
-                          <LinkButton
-                            key={id}
-                            onClick={() => setOpenMessage(m)}
-                          >
-                            {m.subject}
-                          </LinkButton>
-                        ) : null;
-                      })}
+                      <EvidenceLinks
+                        ids={result.sources}
+                        state={state}
+                        onOpen={(id) => void openSource(id)}
+                      />
                     </p>
                   </div>
                 )}
               </section>
             )}
             <SectionHead title="Services">
-              <LinkButton onClick={() => void browse()} disabled={!!busy}>
+              <LinkButton
+                onClick={() => void browse()}
+                disabled={!!busy || !!activeAgent?.archived_at}
+              >
                 Find a service
               </LinkButton>
             </SectionHead>
@@ -1378,7 +1546,7 @@ export default function Mailbox() {
         )}
         {screen === "inbox" && (
           <div className="ui-col ui-wide">
-            <h1 className="ui-title">Before Mailbox</h1>
+            <h1 className="ui-title">Before Pigeon</h1>
             <p className="ui-sub">
               The same {state.messages.length} messages in one ordinary inbox,
               with nothing sorted or explained.
@@ -1401,8 +1569,7 @@ export default function Mailbox() {
                 <div className="ui-empty">
                   <h3>No messages yet</h3>
                   <p>
-                    Open the Demo menu and load sample messages to fill this
-                    inbox.
+                    Open the menu and load sample messages to fill this inbox.
                   </p>
                 </div>
               )}
@@ -1410,6 +1577,36 @@ export default function Mailbox() {
           </div>
         )}
       </main>
+      {openDocument && (
+        <Dialog
+          title={openDocument.filename}
+          onClose={() => setOpenDocument(null)}
+        >
+          <p className="ui-note">
+            {openDocument.origin === "fixture_preview"
+              ? "Sample document"
+              : openDocument.origin === "agentmail"
+                ? "Received email attachment"
+                : "Uploaded document"}
+          </p>
+          {openDocument.limitation && (
+            <p className="ui-note is-danger">{openDocument.limitation}</p>
+          )}
+          <pre className="ui-pre">{openDocument.text}</pre>
+          {openDocument.truncated && (
+            <p className="ui-note">
+              The extracted text was shortened. Check the original document for
+              the remainder.
+            </p>
+          )}
+          <a
+            className="ui-link"
+            href={`/api/documents/${encodeURIComponent(openDocument.id)}/download`}
+          >
+            Download original
+          </a>
+        </Dialog>
+      )}
       {openMessage && (
         <Dialog
           title={openMessage.subject}
@@ -1420,6 +1617,10 @@ export default function Mailbox() {
           <p className="ui-sub">
             {senderName(openMessage.from)} · {date(openMessage.received_at)}
           </p>
+          <p className="ui-note">From: {openMessage.from}</p>
+          {!!openMessage.recipients?.length && (
+            <p className="ui-note">To: {openMessage.recipients.join(", ")}</p>
+          )}
           {openMessage.facts.suspicious && (
             <p className="ui-note is-danger" role="alert">
               This message tried to change what the agent may do. It was blocked
@@ -1434,10 +1635,11 @@ export default function Mailbox() {
           )}
           {openMessage.media?.unread_attachments && (
             <p className="ui-note">
-              This message has attachments that have not been read yet.
+              This message includes attachments. Readable supporting files
+              appear below.
             </p>
           )}
-          <h3 className="ui-table-label">What Mailbox found</h3>
+          <h3 className="ui-table-label">What Pigeon found</h3>
           <dl className="ui-facts">
             <div>
               <dt>Message type</dt>
@@ -1452,12 +1654,20 @@ export default function Mailbox() {
             {openMessage.facts.amount_minor !== null && (
               <div>
                 <dt>Amount in message</dt>
-                <dd>{money(openMessage.facts.amount_minor)}</dd>
+                <dd>
+                  {openMessage.facts.currency
+                    ? `${openMessage.facts.currency} ${(openMessage.facts.amount_minor / 100).toFixed(2)}`
+                    : `${(openMessage.facts.amount_minor / 100).toFixed(2)} (currency not recorded)`}
+                </dd>
               </div>
             )}
             {openMessage.facts.expires && (
               <div>
-                <dt>Offer expiry</dt>
+                <dt>
+                  {openMessage.kind === "offer"
+                    ? "Offer expiry"
+                    : "Date in message"}
+                </dt>
                 <dd>
                   {date(openMessage.facts.expires)}
                   {new Date(openMessage.facts.expires) < new Date()
@@ -1500,7 +1710,7 @@ export default function Mailbox() {
             </p>
           )}
           {openMessage.scenario && (
-            <p className="ui-note">Demo variant: {openMessage.scenario}</p>
+            <p className="ui-note">Sample type: {openMessage.scenario}</p>
           )}
           {openMessage.html && (
             <iframe
@@ -1516,6 +1726,18 @@ export default function Mailbox() {
             </summary>
             <pre className="ui-pre">{openMessage.text}</pre>
           </details>
+          <EvidenceLinks
+            ids={
+              state.documents
+                ?.filter((d) => d.message_id === openMessage.id)
+                .map((d) => d.id) ?? []
+            }
+            state={state}
+            onOpen={(id) => {
+              setOpenMessage(null);
+              void openSource(id);
+            }}
+          />
         </Dialog>
       )}
       {agentForm && (

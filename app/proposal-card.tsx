@@ -1,10 +1,12 @@
 "use client";
+import type { ReactNode } from "react";
 import { Check, Clock, RefreshCw } from "lucide-react";
 import type {
   Message,
   Proposal,
   PublicAgent,
   PublicWallet,
+  PublicAgentAllowance,
 } from "../src/app-model";
 import {
   money,
@@ -36,6 +38,10 @@ export function ProposalCard({
   errorMessage,
   sourceMessages,
   onSource,
+  allowance,
+  evidence,
+  now,
+  onReviewAgain,
 }: {
   proposal: Proposal;
   agent?: PublicAgent;
@@ -48,24 +54,48 @@ export function ProposalCard({
   errorMessage: string;
   sourceMessages: Message[];
   onSource: (id: string) => void;
+  allowance?: PublicAgentAllowance | null;
+  evidence?: ReactNode;
+  now?: string;
+  onReviewAgain?: () => void;
 }) {
   const paying = ["PAYING", "RECONCILING"].includes(p.status),
     waiting = p.status === "WAITING",
     paid = p.status === "PAID",
     open = !paying && !waiting && !paid;
   const after = w.available - p.amount;
+  const quoteExpired =
+    open &&
+    !["condition", "schedule"].includes(p.kind) &&
+    (!p.quote_expires ||
+      !(new Date(p.quote_expires) > new Date(now ?? Date.now())));
+  const allowanceBlock =
+    open && p.kind !== "condition" && p.kind !== "schedule" && allowance
+      ? allowance.paused
+        ? "New payments for this agent are paused."
+        : allowance.expired
+          ? "The total allowance expired. Review its expiry before approving."
+          : p.amount > allowance.available
+            ? "This proposal exceeds the remaining total allowance across this agent’s services."
+            : undefined
+      : undefined;
+  const approvalBlock = quoteExpired
+    ? "This price expired. Get a fresh review before approving."
+    : allowanceBlock;
   return (
     <section className="ui-card" data-testid="proposal" aria-label="Proposal">
       <div className="ui-card-top">
         <div>
           <div className="ui-card-who">
-            {statusLine(p)}
+            {quoteExpired ? "Price expired" : statusLine(p)}
             {paid && (
               <Badge tone="ok">
                 <Check size={11} /> Paid
               </Badge>
             )}
-            {waiting && <Badge>Watching</Badge>}
+            {waiting && (
+              <Badge>{p.kind === "schedule" ? "Scheduled" : "Watching"}</Badge>
+            )}
             {paying && <Badge tone="warn">Confirming</Badge>}
           </div>
           <h2 className="ui-card-title">{p.title}</h2>
@@ -77,7 +107,88 @@ export function ProposalCard({
         </div>
       </div>
       <div className="ui-card-body">
-        <p data-testid="proposal-rationale">{p.rationale}</p>
+        {p.monthly_schedule && (
+          <div aria-label="Monthly purchase rule" className="ui-monthly-rule">
+            <p>
+              <strong>
+                {p.quantity} × {p.monthly_schedule.item.name}
+              </strong>
+            </p>
+            <p>
+              Every month on day {p.monthly_schedule.day_of_month} at{" "}
+              {p.monthly_schedule.local_time} · {p.monthly_schedule.timezone}
+            </p>
+            <p>
+              {p.monthly_schedule.price_inclusive ? "Up to" : "Below"}{" "}
+              {money(p.monthly_schedule.max_amount_minor)} delivered per order.
+              Ask before changing the product, quantity or price boundary.
+            </p>
+            {p.next_scheduled_at && (
+              <p>
+                <strong>Next eligible purchase:</strong>{" "}
+                {new Date(p.next_scheduled_at).toLocaleString("en-US", {
+                  dateStyle: "medium",
+                  timeStyle: "short",
+                  timeZone: p.monthly_schedule.timezone,
+                })}
+              </p>
+            )}
+            <p className="ui-note">
+              Last reviewed quote: {money(p.amount)}. Each due purchase must fit
+              both the rule and your wallet limits.
+            </p>
+            <p className="ui-note">
+              Permission ends{" "}
+              {new Date(p.monthly_schedule.expires_at).toLocaleString("en-US", {
+                dateStyle: "medium",
+                timeStyle: "short",
+                timeZone: p.monthly_schedule.timezone,
+              })}
+              .{" "}
+              {p.monthly_schedule.day_of_month > 28
+                ? "Short months use their last day. "
+                : ""}
+              Each purchase checks current stock, delivered price and payment
+              limits.
+            </p>
+            {p.latest_scheduled_purchase && (
+              <p className="ui-note" data-testid="latest-monthly-purchase">
+                {p.latest_scheduled_purchase.period}:{" "}
+                {p.latest_scheduled_purchase.status === "PAID"
+                  ? "Payment verified"
+                  : p.latest_scheduled_purchase.status === "RECONCILING" ||
+                      p.latest_scheduled_purchase.status === "PAYING"
+                    ? "Payment awaiting confirmation"
+                    : "Purchase needs review"}{" "}
+                · {money(p.latest_scheduled_purchase.amount)}
+                {p.latest_scheduled_purchase.capture_id && (
+                  <small>
+                    PayPal sandbox capture{" "}
+                    <span className="ui-mono">
+                      {p.latest_scheduled_purchase.capture_id}
+                    </span>
+                  </small>
+                )}
+              </p>
+            )}
+          </div>
+        )}
+        {p.kind === "schedule" ? (
+          <details>
+            <summary>Why this rule</summary>
+            <p data-testid="proposal-rationale">{p.rationale}</p>
+          </details>
+        ) : (
+          <p data-testid="proposal-rationale">{p.rationale}</p>
+        )}
+        {p.kind === "schedule" &&
+          p.next_scheduled_at &&
+          new Date(w.expires_at) <= new Date(p.next_scheduled_at) && (
+            <p className="ui-note is-danger" role="alert">
+              The wallet permission ends before the next monthly purchase.
+              Extend it in Edit limits before approving this rule.
+            </p>
+          )}
         {p.booking && (
           <p className="ui-note">
             <Clock size={14} />
@@ -92,6 +203,21 @@ export function ProposalCard({
           </p>
         )}
         {p.reason && <p className="ui-note is-danger">{p.reason}</p>}
+        {quoteExpired && (
+          <div className="ui-note is-danger" role="alert">
+            <p>No payment will be made at this expired price.</p>
+            {onReviewAgain && (
+              <Button disabled={busy} onClick={onReviewAgain}>
+                Get a fresh review
+              </Button>
+            )}
+          </div>
+        )}
+        {allowanceBlock && (
+          <p className="ui-note is-danger" role="alert">
+            {allowanceBlock}
+          </p>
+        )}
         {p.comparison && (
           <div data-testid="deal-comparison">
             <h3 className="ui-table-label">Why this deal</h3>
@@ -135,16 +261,25 @@ export function ProposalCard({
             </p>
           </div>
         )}
-        {!!sourceMessages.length && (
+        {evidence ? (
           <p className="ui-note" data-testid="source-links">
-            From {sourceMessages.length} message
-            {sourceMessages.length > 1 ? "s" : ""}:
-            {sourceMessages.map((message) => (
-              <LinkButton key={message.id} onClick={() => onSource(message.id)}>
-                {message.subject}
-              </LinkButton>
-            ))}
+            Sources: {evidence}
           </p>
+        ) : (
+          !!sourceMessages.length && (
+            <p className="ui-note" data-testid="source-links">
+              From {sourceMessages.length} message
+              {sourceMessages.length > 1 ? "s" : ""}:
+              {sourceMessages.map((message) => (
+                <LinkButton
+                  key={message.id}
+                  onClick={() => onSource(message.id)}
+                >
+                  {message.subject}
+                </LinkButton>
+              ))}
+            </p>
+          )
         )}
         {p.capture_id && (
           <p className="ui-note">
@@ -165,23 +300,33 @@ export function ProposalCard({
       </div>
       {open && (
         <WalletRuleForm
+          {...(!["condition", "schedule"].includes(p.kind)
+            ? { reviewAmount: p.amount }
+            : {})}
           errorMessage={errorMessage}
           key={`${p.id}:${w.revision}`}
           wallet={w}
           busy={busy}
           requirePayment
+          requireAutomatic={p.kind === "schedule"}
+          minimumAutomatic={p.kind === "schedule" ? 1 : 0}
+          {...(approvalBlock ? { blockedReason: approvalBlock } : {})}
           buttonLabel={
-            p.kind === "condition"
-              ? "Approve price rule"
-              : !w.connected
-                ? "Approve and connect PayPal"
-                : `Approve ${money(p.amount)}`
+            p.kind === "schedule"
+              ? !w.connected
+                ? "Approve monthly rule and connect PayPal"
+                : "Approve monthly rule"
+              : p.kind === "condition"
+                ? "Approve price rule"
+                : !w.connected
+                  ? "Approve and connect PayPal"
+                  : `Approve ${money(p.amount)}`
           }
           context={
             <>
               Pays from the {w.name} wallet: {money(w.available)} left this{" "}
               {w.period}
-              {p.kind !== "condition" && after >= 0
+              {p.kind !== "condition" && p.kind !== "schedule" && after >= 0
                 ? `, ${money(after)} after`
                 : ""}
               {(w.reserved > 0 || w.prior_reserved > 0) && (
@@ -211,13 +356,25 @@ export function ProposalCard({
       )}
       {waiting && (
         <div className="ui-card-foot">
-          <p className="ui-card-ctx">
-            The exact item is watched until{" "}
-            {p.condition_expires
-              ? shortDate(p.condition_expires)
-              : "the chosen expiry"}
-            . The rule can buy once.
-          </p>
+          {p.kind === "schedule" ? (
+            <>
+              <p className="ui-card-ctx">
+                One order per eligible month. Any order already dispatched
+                remains in your payment records.
+              </p>
+              <Button variant="ghost" disabled={busy} onClick={onDecline}>
+                Stop monthly purchases
+              </Button>
+            </>
+          ) : (
+            <p className="ui-card-ctx">
+              The exact item is watched until{" "}
+              {p.condition_expires
+                ? shortDate(p.condition_expires)
+                : "the chosen expiry"}
+              . The rule can buy once.
+            </p>
+          )}
         </div>
       )}
       {paid && (

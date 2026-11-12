@@ -1,13 +1,19 @@
 import { AgentMailClient, AgentMailError } from "agentmail";
 import { randomUUID, createHash } from "node:crypto";
 import fixtureEmails from "../fixtures/emails.json" with { type: "json" };
-import { MerchantError } from "@mailbox/service-sdk";
+import { MerchantError, type OutboundEmail } from "@mailbox/service-sdk";
 import type { AppStore } from "./app-store.ts";
 import type { Wallet, PersonalAgent, Message } from "./app-model.ts";
 import { defaultAgent } from "./agents.ts";
 import { catalogue } from "./catalogue.ts";
 import { configured, extractEmail } from "./ai.ts";
 import { readEmailContent } from "./email-content.ts";
+import { replyAddresses } from "./reply-routing.ts";
+import {
+  importDocument,
+  readBoundedBody,
+  MAX_DOCUMENT_BYTES,
+} from "./documents.ts";
 
 function client() {
   if (!configured("AGENTMAIL_API_KEY"))
@@ -57,6 +63,11 @@ export async function provisionAgentAddress(
   store: AppStore,
   agent: PersonalAgent,
 ): Promise<PersonalAgent> {
+  if (agent.archived_at)
+    throw new MerchantError(
+      "AGENT_ARCHIVED",
+      "This agent is archived. Create a new agent to receive a new address.",
+    );
   if (agent.inbox_id && agent.email) return agent;
   const slug =
     agent.name
@@ -114,7 +125,9 @@ export function incomingService(
   text: string,
   sender: string,
   legacyServiceId?: string,
+  assignedServices: { id: string; name: string }[] = [],
 ) {
+  const knownServices = [...catalogue.services, ...assignedServices];
   const fixtureId = /Mailbox fixture reference:\s*([a-z0-9-]+)/i.exec(
     text,
   )?.[1];
@@ -127,11 +140,13 @@ export function incomingService(
   if (marker)
     try {
       const event = JSON.parse(marker[1]!);
-      if (catalogue.services.some((service) => service.id === event.service_id))
+      if (knownServices.some((service) => service.id === event.service_id))
         return { service_id: event.service_id as string };
     } catch {}
   const normalized = sender.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const services = catalogue.services.filter((service) =>
+  const services = [
+    ...new Map(knownServices.map((s) => [s.id, s])).values(),
+  ].filter((service) =>
     normalized.includes(service.name.toLowerCase().replace(/[^a-z0-9]/g, "")),
   );
   return {
@@ -156,7 +171,7 @@ async function syncMailbox(
   const result = await provider.inboxes.messages.list(wallet.inbox_id, {
     limit: 50,
   });
-  const known = new Set(
+  const known = new Map(
     store
       .messages(wallet.owner)
       .filter((message) =>
@@ -165,11 +180,19 @@ async function syncMailbox(
           : message.service_id === wallet.legacy_service_id,
       )
       .filter((m) => m.provider_id)
-      .map((m) => m.provider_id),
+      .map((m) => [m.provider_id, m] as const),
   );
   for (const item of [...result.messages].reverse()) {
     const providerId = `${wallet.inbox_id}:${item.messageId}`;
-    if (known.has(providerId) || known.has(item.messageId)) continue;
+    const previous = known.get(providerId) ?? known.get(item.messageId);
+    const retryAttachments =
+      previous &&
+      (previous.attachments?.some(
+        (a) => !a.read_status || a.read_status === "retry",
+      ) ||
+        (previous.media?.unread_attachments && !previous.attachments?.length));
+    if (previous && !retryAttachments && previous.reply_to !== undefined)
+      continue;
     const message = await provider.inboxes.messages.get(
       wallet.inbox_id,
       item.messageId,
@@ -185,9 +208,18 @@ async function syncMailbox(
       text,
       message.from,
       wallet.legacy_service_id,
+      store
+        .wallets(wallet.owner)
+        .filter((w) =>
+          wallet.agent_id
+            ? w.agent_id === wallet.agent_id
+            : w.service_id === wallet.legacy_service_id,
+        )
+        .map((w) => ({ id: w.service_id, name: w.name })),
     );
-    store.saveMessage({
+    const saved: Message = {
       id:
+        previous?.id ??
         store.setting<string>(`seed-provider:${message.messageId}`) ??
         (identified.fixture
           ? `fixture:${wallet.owner}:${identified.fixture.id}`
@@ -198,6 +230,8 @@ async function syncMailbox(
       provider_id: providerId,
       subject: message.subject ?? "Service message",
       from: message.from,
+      reply_to: message.replyTo ?? [],
+      recipients: message.to,
       text,
       format: message.html ? "html" : "plain_text",
       ...(identified.fixture ? { scenario: identified.fixture.scenario } : {}),
@@ -214,6 +248,7 @@ async function syncMailbox(
       facts: {
         item: facts.item,
         amount_minor: facts.amount_minor,
+        currency: facts.currency,
         expires: facts.expires,
         action_id: facts.action_id,
         suspicious: facts.suspicious,
@@ -223,12 +258,93 @@ async function syncMailbox(
         date_hint: facts.date_hint,
       },
       origin: "agentmail",
+      attachments: (message.attachments ?? []).map((a) => ({
+        id: a.attachmentId,
+        filename: a.filename ?? "attachment",
+        content_type: a.contentType ?? "application/octet-stream",
+        size: a.size,
+        read_status: wallet.agent_id ? ("retry" as const) : ("unread" as const),
+      })),
       media: {
         image_count: content.images.length,
         needs_vision: content.needsVision,
         unread_attachments: Boolean(message.attachments?.length),
       },
-    });
+    };
+    store.saveMessage(saved);
+    if (previous?.provider_id && previous.reply_to === undefined)
+      store.recordReplyRouting(
+        wallet.owner,
+        previous.id,
+        previous.provider_id,
+        saved.reply_to!,
+      );
+    if (wallet.agent_id)
+      for (const attachment of message.attachments ?? []) {
+        const metadata = saved.attachments!.find(
+          (a) => a.id === attachment.attachmentId,
+        )!;
+        const cached = previous?.attachments?.find(
+          (a) => a.id === attachment.attachmentId,
+        );
+        if (cached?.read_status && cached.read_status !== "retry") {
+          Object.assign(metadata, cached);
+          continue;
+        }
+        if (attachment.size > MAX_DOCUMENT_BYTES) {
+          metadata.read_status = "unread";
+          continue;
+        }
+        try {
+          const info = await provider.inboxes.messages.getAttachment(
+            wallet.inbox_id,
+            message.messageId,
+            attachment.attachmentId,
+          );
+          const url = new URL(info.downloadUrl);
+          if (url.protocol !== "https:" || url.username || url.password)
+            throw Error("Invalid attachment download");
+          const download = await fetch(url, {
+            redirect: "error",
+            signal: AbortSignal.timeout(10000),
+          });
+          if (!download.ok) throw Error("Attachment unavailable");
+          const doc = await importDocument(
+            store,
+            wallet.owner,
+            wallet.agent_id,
+            {
+              filename: attachment.filename ?? "attachment",
+              content_type:
+                attachment.contentType ?? "application/octet-stream",
+              bytes: await readBoundedBody(download.body),
+              message_id: saved.id,
+              origin: "agentmail",
+            },
+          );
+          metadata.read_status =
+            doc.status === "readable" ? "readable" : "unread";
+          metadata.document_id = doc.id;
+        } catch {
+          store.log(
+            wallet.owner,
+            "DOCUMENT_UNREAD",
+            "An email attachment could not be read. It remains missing evidence.",
+            identified.service_id,
+            null,
+            wallet.agent_id,
+          );
+        }
+      }
+    saved.media!.unread_attachments = Boolean(
+      saved.attachments?.some((a) => a.read_status !== "readable"),
+    );
+    const updated = store.updateAttachmentReadState(
+      wallet.owner,
+      saved.id,
+      saved.attachments ?? [],
+    );
+    known.set(providerId, updated);
     if (facts.suspicious)
       store.log(
         wallet.owner,
@@ -252,6 +368,11 @@ export async function sendAgentReply(
   message: Message,
   text: string,
   idempotencyKey: string,
+  attachments: {
+    filename: string;
+    contentType: string;
+    content: string;
+  }[] = [],
 ): Promise<string> {
   const inbox = agent.inbox_id!;
   const reference = message.provider_id!;
@@ -261,7 +382,11 @@ export async function sendAgentReply(
   const sent = await client().inboxes.messages.reply(
     inbox,
     messageId,
-    { text },
+    {
+      text,
+      to: replyAddresses(message),
+      ...(attachments.length ? { attachments } : {}),
+    },
     { idempotencyKey: `mailbox-reply-${idempotencyKey}` },
   );
   return sent.messageId;
@@ -283,13 +408,7 @@ export async function deliverOutbox(store: AppStore) {
       "Could not retrieve merchant confirmations.",
     );
   const { emails } = (await response.json()) as {
-    emails: {
-      id: string;
-      to: string;
-      subject: string;
-      text: string;
-      provider_message_id: string | null;
-    }[];
+    emails: OutboundEmail[];
   };
   const sender = emails.some((e) => !e.provider_message_id)
     ? await merchantSender(store)
@@ -301,7 +420,20 @@ export async function deliverOutbox(store: AppStore) {
     if (!receipt) {
       const sent = await client().inboxes.messages.send(
         sender,
-        { to: [email.to], subject: email.subject, text: email.text },
+        {
+          to: [email.to],
+          subject: email.subject,
+          text: email.text,
+          ...(email.attachments?.length
+            ? {
+                attachments: email.attachments.map((a) => ({
+                  filename: a.filename,
+                  contentType: a.content_type,
+                  content: a.content_base64,
+                })),
+              }
+            : {}),
+        },
         { idempotencyKey: `mailbox-${email.id}` },
       );
       receipt = sent.messageId;

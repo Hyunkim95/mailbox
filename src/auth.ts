@@ -19,7 +19,7 @@ export function createSession(owner: string = randomUUID()) {
   )
     throw new MerchantError(
       "INVALID_WORKSPACE",
-      "The demo workspace is not configured correctly.",
+      "The shared workspace is not configured correctly.",
     );
   const value = `${owner}.${Math.floor(Date.now() / 1000) + age}`;
   return `${value}.${createHmac("sha256", secret()).update(value).digest("hex")}`;

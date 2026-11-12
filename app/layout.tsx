@@ -15,9 +15,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mailbox · Your services, your terms",
+  applicationName: "Pigeon",
+  title: "Pigeon · Your services, your terms",
   description:
-    "An address and a wallet for every service. A PayPal sandbox demonstration with invented services.",
+    "Personal agents with their own inboxes and service spending limits. A PayPal sandbox demonstration with invented services.",
 };
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
